@@ -24,13 +24,14 @@ pot:
   weights: [1.0, 1.0, 1.0]
 
 model:
+  task: regression       # 'classification' or 'regression'
   channels: [16, 32]
   kernel_size: 5
   dropout: 0.2
   lr: 0.001
   batch_size: 64
-  max_epochs: 100
-  patience: 10
+  max_epochs: 200
+  patience: 15
 
 evaluate:
   agreement_radii: [5, 10]

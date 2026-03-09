@@ -8,14 +8,15 @@ from torch.utils.data import DataLoader, TensorDataset
 logger = logging.getLogger(__name__)
 
 
-def train_model(X, y, model, config):
+def train_model(X, y, model, config, task="classification"):
     """Train model with early stopping on validation loss.
 
     Args:
         X: Tensor of shape (N, 3, L)
-        y: Tensor of shape (N,) class indices
+        y: Tensor of shape (N,) — class indices (classification) or float targets (regression)
         model: ThresholdCNN instance
         config: dict with keys 'lr', 'batch_size', 'max_epochs', 'patience'
+        task: 'classification' or 'regression'
 
     Returns:
         trained model (with best weights loaded)
@@ -37,7 +38,11 @@ def train_model(X, y, model, config):
     )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.get('lr', 1e-3))
-    criterion = nn.CrossEntropyLoss()
+
+    if task == "regression":
+        criterion = nn.SmoothL1Loss()
+    else:
+        criterion = nn.CrossEntropyLoss()
 
     best_val_loss = float('inf')
     patience_counter = 0
@@ -54,8 +59,8 @@ def train_model(X, y, model, config):
 
         model.eval()
         with torch.no_grad():
-            val_logits = model(X_val)
-            val_loss = criterion(val_logits, y_val).item()
+            val_out = model(X_val)
+            val_loss = criterion(val_out, y_val).item()
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -79,17 +84,20 @@ def train_model(X, y, model, config):
     return model
 
 
-def predict(model, X):
-    """Return predicted class indices.
+def predict(model, X, task="classification"):
+    """Return predictions.
 
     Args:
         model: trained ThresholdCNN
         X: Tensor of shape (N, 3, L)
+        task: 'classification' or 'regression'
 
     Returns:
-        ndarray of shape (N,) with predicted class indices
+        ndarray of shape (N,) — class indices (classification) or float values in [0,1] (regression)
     """
     model.eval()
     with torch.no_grad():
-        logits = model(X)
-        return logits.argmax(dim=1).numpy()
+        out = model(X)
+        if task == "regression":
+            return out.numpy()
+        return out.argmax(dim=1).numpy()

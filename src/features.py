@@ -118,3 +118,72 @@ def build_dataset(
         )
 
     return datasets
+
+
+def build_dataset_regression(
+    all_diagnostics: list,
+    config: dict,
+) -> tuple:
+    """Build a unified dataset with normalized [0, 1] regression labels.
+
+    Parameters
+    ----------
+    all_diagnostics : list of (dataset_dict, diagnostics_dict)
+    config : dict
+
+    Returns
+    -------
+    X : Tensor of shape (N, 3, L_max) — zero-padded feature matrices
+    y : Tensor of shape (N,) float32 — normalized k* in [0, 1]
+    meta : list of dict — per-sample metadata with k_min, k_max, n
+    """
+    # First pass: determine L_max
+    L_max = 0
+    for _, diag in all_diagnostics:
+        k_grid = np.asarray(diag["k_grid"])
+        L_max = max(L_max, len(k_grid))
+
+    feature_matrices = []
+    labels = []
+    meta = []
+
+    for ds, diag in all_diagnostics:
+        n = int(ds["n"])
+        k_grid = np.asarray(diag["k_grid"])
+        k_star = diag["k_star"]
+        k_min = int(k_grid[0])
+        k_max = int(k_grid[-1])
+
+        # Build and normalize feature matrix (L, 3)
+        F = build_feature_matrix(diag)
+        F = normalize_features(F)
+
+        # Pad to L_max with zeros
+        L = F.shape[0]
+        if L < L_max:
+            pad = np.zeros((L_max - L, F.shape[1]), dtype=F.dtype)
+            F = np.vstack([F, pad])
+
+        feature_matrices.append(F)
+
+        # Normalized label in [0, 1]
+        if k_max > k_min:
+            y_val = (k_star - k_min) / (k_max - k_min)
+        else:
+            y_val = 0.5
+        y_val = np.clip(y_val, 0.0, 1.0)
+        labels.append(y_val)
+
+        meta.append({"k_min": k_min, "k_max": k_max, "n": n})
+
+    # Stack into (N, L_max, 3) then transpose to (N, 3, L_max)
+    X_np = np.stack(feature_matrices, axis=0)
+    X = torch.tensor(X_np, dtype=torch.float32).permute(0, 2, 1)
+    y = torch.tensor(labels, dtype=torch.float32)
+
+    logger.info(
+        "Regression dataset: %d samples, L_max=%d, X shape=%s, y range=[%.3f, %.3f]",
+        len(labels), L_max, tuple(X.shape), y.min().item(), y.max().item(),
+    )
+
+    return X, y, meta

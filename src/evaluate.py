@@ -7,7 +7,26 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy import stats
 
+from src.synthetic import _generate_lognormal_pareto_mix, _generate_two_pareto
+
 logger = logging.getLogger(__name__)
+
+_mc_quantile_cache = {}
+
+
+def _params_key(dist_type, dist_params, p):
+    return (dist_type, tuple(sorted(dist_params.items())), p)
+
+
+def _mc_quantile(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
+    rng = np.random.RandomState(seed)
+    if dist_type == 'lognormal_pareto_mix':
+        samples = _generate_lognormal_pareto_mix(rng, n_mc, **dist_params)
+    elif dist_type == 'two_pareto':
+        samples = _generate_two_pareto(rng, n_mc, **dist_params)
+    else:
+        raise ValueError(f"No MC quantile for {dist_type}")
+    return float(np.quantile(samples, p))
 
 
 def agreement_rate(k_pred, k_true, radius):
@@ -59,29 +78,12 @@ def true_quantile(dist_type, dist_params, p):
         return abs(stats.t.ppf(p, df=dist_params['df']))
     elif dist_type == 'pareto':
         return stats.pareto.ppf(p, b=dist_params['alpha'])
-    elif dist_type == 'lognormal_pareto_mix':
-        # Approximate: for high p, dominated by Pareto tail
-        # Use Pareto quantile adjusted for mix fraction
-        mix_frac = dist_params.get('mix_frac', 0.1)
-        alpha = dist_params['pareto_alpha']
-        # P(X > x) = mix_frac * P_pareto(X > x), so adjust p
-        p_adj = 1 - (1 - p) / mix_frac
-        if p_adj < 0:
-            # Quantile is in lognormal body
-            return stats.lognorm.ppf(p, s=dist_params.get('lognormal_sigma', 1.0),
-                                      scale=np.exp(dist_params.get('lognormal_mu', 0.0)))
-        return stats.pareto.ppf(p_adj, b=alpha)
-    elif dist_type == 'two_pareto':
-        # Approximate using the tail Pareto
-        cp_frac = dist_params.get('changepoint_frac', 0.05)
-        if 1 - p < cp_frac:
-            alpha2 = dist_params['alpha2']
-            alpha1 = dist_params['alpha1']
-            # Threshold at changepoint
-            u_cp = stats.pareto.ppf(1 - cp_frac, b=alpha1)
-            p_tail = 1 - (1 - p) / cp_frac
-            return u_cp * stats.pareto.ppf(p_tail, b=alpha2) if p_tail > 0 else u_cp
-        return stats.pareto.ppf(p, b=dist_params['alpha1'])
+    elif dist_type in ('lognormal_pareto_mix', 'two_pareto'):
+        key = _params_key(dist_type, dist_params, p)
+        if key not in _mc_quantile_cache:
+            logger.info("Computing MC quantile for %s (p=%s) ...", dist_type, p)
+            _mc_quantile_cache[key] = _mc_quantile(dist_type, dist_params, p)
+        return _mc_quantile_cache[key]
     raise ValueError(f"Unknown dist_type: {dist_type}")
 
 
@@ -107,6 +109,7 @@ def evaluate_all(test_data, k_pred, k_true, config):
     p = config.get('quantile_p', 0.99)
     q_est = []
     q_true = []
+    dist_types = []
     for i, (ds, diag) in enumerate(test_data):
         sorted_desc = np.sort(ds['samples'])[::-1]
         k = k_pred[i]
@@ -118,15 +121,36 @@ def evaluate_all(test_data, k_pred, k_true, config):
         n = ds['n']
         q_est.append(pot_quantile(sorted_desc, k, xi, beta, n, p))
         q_true.append(true_quantile(ds['dist_type'], ds['params'], p))
+        dist_types.append(ds['dist_type'])
 
     if q_est:
-        results['quantile_rmse'] = np.sqrt(np.mean((np.array(q_est) - np.array(q_true)) ** 2))
+        q_est_arr = np.array(q_est)
+        q_true_arr = np.array(q_true)
+        results['quantile_rmse'] = np.sqrt(np.mean((q_est_arr - q_true_arr) ** 2))
+
+        # Relative RMSE (normalized by true quantile)
+        rel_errors = (q_est_arr - q_true_arr) / q_true_arr
+        results['relative_rmse'] = np.sqrt(np.mean(rel_errors ** 2))
+
+        # Per-distribution RMSE breakdown
+        results['rmse_by_dist'] = {}
+        for dist_type in sorted(set(dist_types)):
+            mask = np.array([d == dist_type for d in dist_types])
+            q_e = q_est_arr[mask]
+            q_t = q_true_arr[mask]
+            results['rmse_by_dist'][dist_type] = {
+                'rmse': np.sqrt(np.mean((q_e - q_t) ** 2)),
+                'relative_rmse': np.sqrt(np.mean(((q_e - q_t) / q_t) ** 2)),
+                'count': int(mask.sum()),
+            }
     else:
         results['quantile_rmse'] = float('nan')
+        results['relative_rmse'] = float('nan')
+        results['rmse_by_dist'] = {}
 
-    logger.info("Agreement rates: %s", results['agreement'])
-    logger.info("Quantile RMSE: %.4f (from %d / %d valid samples)",
-                results['quantile_rmse'], len(q_est), len(test_data))
+    logger.debug("Quantile RMSE: %.4f, Relative RMSE: %.2f%% (from %d / %d valid samples)",
+                 results['quantile_rmse'], results['relative_rmse'] * 100,
+                 len(q_est), len(test_data))
 
     return results
 
