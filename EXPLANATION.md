@@ -212,9 +212,12 @@ Evaluated at r=5 and r=10 (from `config/default.yaml: agreement_radii: [5, 10]`)
 - If xi != 0: Q(p) = u + (beta/xi) * ((n/k * (1-p))^(-xi) - 1)
 - If xi == 0: Q(p) = u - beta * log(n/k * (1-p))
 
-`true_quantile(dist_type, dist_params, p)` computes the analytical (or approximate) true quantile for each distribution family. For mixtures (lognormal-Pareto, two-Pareto), it uses tail-dominance approximations since closed-form quantiles don't exist.
+`true_quantile(dist_type, dist_params, p)` computes the true quantile for each distribution family. For Student-t and Pareto, this is analytical (via `scipy.stats`). For mixtures (lognormal-Pareto, two-Pareto), no closed-form quantile exists, so it uses **Monte Carlo simulation** (10M samples) with caching to avoid recomputation.
 
-`evaluate_all()` computes RMSE between estimated and true quantiles at p=0.99, as suggested by the PDF's Err(p) = |q_hat_p - q_true_p|.
+`evaluate_all()` computes several metrics at p=0.99:
+- **Absolute RMSE**: `sqrt(mean((Q_hat - Q_true)^2))`
+- **Relative RMSE**: `sqrt(mean(((Q_hat - Q_true) / Q_true)^2))` — normalized by the true quantile, making errors comparable across distributions with different quantile magnitudes
+- **Per-distribution breakdown**: RMSE and relative RMSE computed separately for each distribution family
 
 ### Plots
 
