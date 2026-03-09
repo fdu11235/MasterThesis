@@ -37,7 +37,26 @@ def train_model(X, y, model, config, task="classification"):
         shuffle=True,
     )
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.get('lr', 1e-3))
+    # Transfer learning: discriminative LR and backbone freezing
+    freeze_backbone_epochs = config.get('freeze_backbone_epochs', 0)
+    backbone_lr_factor = config.get('backbone_lr_factor', 1.0)
+    base_lr = config.get('lr', 1e-3)
+
+    # Freeze backbone if requested
+    if freeze_backbone_epochs > 0 and hasattr(model, 'conv'):
+        for p in model.conv.parameters():
+            p.requires_grad = False
+        logger.info("Froze backbone for first %d epochs", freeze_backbone_epochs)
+
+    # Discriminative LR: lower LR for backbone
+    if backbone_lr_factor < 1.0 and hasattr(model, 'conv') and hasattr(model, 'head'):
+        param_groups = [
+            {'params': model.conv.parameters(), 'lr': base_lr * backbone_lr_factor},
+            {'params': model.head.parameters(), 'lr': base_lr},
+        ]
+        optimizer = torch.optim.Adam(param_groups)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=base_lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6,
     )
@@ -54,6 +73,24 @@ def train_model(X, y, model, config, task="classification"):
     history = {"train_loss": [], "val_loss": [], "lr": []}
 
     for epoch in range(config.get('max_epochs', 100)):
+        # Unfreeze backbone after freeze period
+        if freeze_backbone_epochs > 0 and epoch == freeze_backbone_epochs and hasattr(model, 'conv'):
+            for p in model.conv.parameters():
+                p.requires_grad = True
+            logger.info("Unfreezing backbone at epoch %d", epoch + 1)
+            # Rebuild optimizer with all parameters
+            if backbone_lr_factor < 1.0:
+                param_groups = [
+                    {'params': model.conv.parameters(), 'lr': base_lr * backbone_lr_factor},
+                    {'params': model.head.parameters(), 'lr': base_lr},
+                ]
+                optimizer = torch.optim.Adam(param_groups)
+            else:
+                optimizer = torch.optim.Adam(model.parameters(), lr=base_lr)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6,
+            )
+
         model.train()
         epoch_train_loss = 0.0
         n_batches = 0

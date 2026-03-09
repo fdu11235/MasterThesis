@@ -84,7 +84,8 @@ def main():
     else:
         logger.info("[Steps 2-4] Computing POT diagnostics (%d datasets, n_jobs=%d) …",
                      len(datasets), args.n_jobs)
-        pot_cfg = config["pot"]
+        pot_cfg = dict(config["pot"])
+        pot_cfg["decluster"] = False  # synthetic data is i.i.d., declustering meaningless
 
         all_diagnostics = Parallel(n_jobs=args.n_jobs, verbose=10)(
             delayed(process_one_dataset)(ds, pot_cfg) for ds in datasets

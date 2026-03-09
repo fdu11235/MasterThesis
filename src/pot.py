@@ -9,6 +9,50 @@ from scipy.stats import genpareto
 logger = logging.getLogger(__name__)
 
 
+def decluster_runs(samples, run_length, quantile_threshold=0.90):
+    """Keep only cluster maxima from temporal exceedances.
+
+    Clusters = groups of exceedances separated by < run_length non-exceedances.
+    Returns (filtered_samples, n_clusters, n_removed).
+    """
+    threshold = np.quantile(samples, quantile_threshold)
+    exceed_mask = samples > threshold
+
+    # Walk samples in temporal order, identify clusters
+    clusters = []  # list of lists of indices
+    current_cluster = []
+    gap = 0
+
+    for i, is_exceed in enumerate(exceed_mask):
+        if is_exceed:
+            if current_cluster and gap >= run_length:
+                # Gap was long enough → finalize previous cluster, start new one
+                clusters.append(current_cluster)
+                current_cluster = [i]
+            else:
+                current_cluster.append(i)
+            gap = 0
+        else:
+            gap += 1
+
+    if current_cluster:
+        clusters.append(current_cluster)
+
+    # Build filtered samples: keep non-exceedances + one max per cluster
+    keep_mask = ~exceed_mask  # all non-exceedances kept
+    n_removed = 0
+    for cluster_indices in clusters:
+        cluster_values = samples[cluster_indices]
+        max_idx = cluster_indices[np.argmax(cluster_values)]
+        keep_mask[max_idx] = True
+        n_removed += len(cluster_indices) - 1
+
+    filtered = samples[keep_mask]
+    logger.info("Declustered: %d clusters, %d removed (n: %d → %d)",
+                len(clusters), n_removed, len(samples), len(filtered))
+    return filtered, len(clusters), n_removed
+
+
 def candidate_k_grid(n: int, k_min: int, k_max_frac: float) -> NDArray:
     """Return candidate k values as an integer array."""
     return np.arange(k_min, int(np.floor(k_max_frac * n)) + 1)
@@ -268,10 +312,29 @@ def process_one_dataset(ds, pot_cfg):
     tuple of (ds, diagnostics)
     """
     samples = ds["samples"]
+
+    # Optional runs declustering
+    declustered = False
+    n_original = len(samples)
+    n_clusters = 0
+    n_removed = 0
+    if pot_cfg.get("decluster", False):
+        run_length = pot_cfg.get("decluster_run_length", 10)
+        k_min = pot_cfg["k_min"]
+        filtered, n_clusters, n_removed = decluster_runs(
+            samples, run_length=run_length)
+        # Guard: only use filtered if enough samples remain
+        if len(filtered) >= 2 * k_min:
+            samples = filtered
+            declustered = True
+        else:
+            logger.warning("Declustering left too few samples (%d < 2*k_min=%d), skipping",
+                           len(filtered), 2 * k_min)
+
     sorted_desc = np.sort(samples)[::-1]
 
     k_grid = candidate_k_grid(
-        n=ds["n"],
+        n=len(samples),
         k_min=pot_cfg["k_min"],
         k_max_frac=pot_cfg["k_max_frac"],
     )
@@ -282,5 +345,10 @@ def process_one_dataset(ds, pot_cfg):
         delta=pot_cfg["delta"],
         weights=tuple(pot_cfg["weights"]),
     )
+
+    # Store declustering metadata
+    diagnostics["declustered"] = declustered
+    diagnostics["n_original"] = n_original
+    diagnostics["n_effective"] = len(samples)
 
     return (ds, diagnostics)

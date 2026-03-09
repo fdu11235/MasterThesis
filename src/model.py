@@ -37,6 +37,23 @@ class ThresholdCNN(nn.Module):
                 nn.Linear(prev_ch, n_classes),
             )
 
+    def load_pretrained_backbone(self, state_dict):
+        """Copy matching params from pretrained checkpoint.
+
+        Returns (n_loaded, n_skipped).
+        """
+        own_state = self.state_dict()
+        n_loaded = 0
+        n_skipped = 0
+        for name, param in state_dict.items():
+            if name in own_state and own_state[name].shape == param.shape:
+                own_state[name].copy_(param)
+                n_loaded += 1
+            else:
+                n_skipped += 1
+        self.load_state_dict(own_state)
+        return n_loaded, n_skipped
+
     def forward(self, x):
         # x: (batch, channels, length)
         x = self.conv(x)

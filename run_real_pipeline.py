@@ -174,9 +174,15 @@ def main():
 
     logger.info("  GARCH split: %d train, %d test", len(garch_train_idx), len(garch_test_idx))
 
-    # ── Step 6: Train CNN (unconditional) ─────────────────────────────────
+    # ── Transfer learning config ─────────────────────────────────────────
     model_cfg = config["model"]
+    tl_cfg = config.get("transfer_learning", {})
+    tl_enabled = tl_cfg.get("enabled", False)
+
+    # ── Step 6: Train CNN (unconditional) ─────────────────────────────────
     ckpt_path = "outputs/checkpoints/model_real.pt"
+    if tl_enabled:
+        ckpt_path = "outputs/checkpoints/model_real_transfer.pt"
 
     if not args.fresh and os.path.exists(ckpt_path):
         logger.info("[Step 6] Loading cached model from %s", ckpt_path)
@@ -200,6 +206,18 @@ def main():
             dropout=model_cfg["dropout"],
             task="regression",
         )
+
+        # Transfer learning: load pretrained weights
+        if tl_enabled:
+            pretrained_path = tl_cfg.get("pretrained_path", "outputs/checkpoints/model_regression.pt")
+            if os.path.exists(pretrained_path):
+                pretrained_state = torch.load(pretrained_path, weights_only=True)
+                n_loaded, n_skipped = model.load_pretrained_backbone(pretrained_state)
+                logger.info("Transfer learning: loaded %d params, skipped %d from %s",
+                            n_loaded, n_skipped, pretrained_path)
+            else:
+                logger.warning("Transfer learning enabled but pretrained not found: %s", pretrained_path)
+
         train_config = {
             "lr": model_cfg["lr"],
             "batch_size": model_cfg["batch_size"],
@@ -207,12 +225,18 @@ def main():
             "patience": model_cfg["patience"],
             "test_fraction": config["evaluate"]["test_fraction"],
         }
+        if tl_enabled:
+            train_config["freeze_backbone_epochs"] = tl_cfg.get("freeze_backbone_epochs", 0)
+            train_config["backbone_lr_factor"] = tl_cfg.get("backbone_lr_factor", 1.0)
+
         model, history = train_model(X_train, y_train, model, train_config, task="regression")
         torch.save(model.state_dict(), ckpt_path)
         logger.info("  → checkpoint saved to %s", ckpt_path)
 
     # ── Step 6b: Train CNN on GARCH-filtered features ─────────────────────
     garch_ckpt_path = "outputs/checkpoints/model_real_garch.pt"
+    if tl_enabled:
+        garch_ckpt_path = "outputs/checkpoints/model_real_garch_transfer.pt"
 
     if not args.fresh and os.path.exists(garch_ckpt_path):
         logger.info("[Step 6b] Loading cached GARCH model from %s", garch_ckpt_path)
@@ -236,6 +260,18 @@ def main():
             dropout=model_cfg["dropout"],
             task="regression",
         )
+
+        # Transfer learning: load pretrained weights
+        if tl_enabled:
+            pretrained_path = tl_cfg.get("pretrained_path", "outputs/checkpoints/model_regression.pt")
+            if os.path.exists(pretrained_path):
+                pretrained_state = torch.load(pretrained_path, weights_only=True)
+                n_loaded, n_skipped = garch_model.load_pretrained_backbone(pretrained_state)
+                logger.info("Transfer learning (GARCH): loaded %d params, skipped %d from %s",
+                            n_loaded, n_skipped, pretrained_path)
+            else:
+                logger.warning("Transfer learning enabled but pretrained not found: %s", pretrained_path)
+
         train_config = {
             "lr": model_cfg["lr"],
             "batch_size": model_cfg["batch_size"],
@@ -243,6 +279,10 @@ def main():
             "patience": model_cfg["patience"],
             "test_fraction": config["evaluate"]["test_fraction"],
         }
+        if tl_enabled:
+            train_config["freeze_backbone_epochs"] = tl_cfg.get("freeze_backbone_epochs", 0)
+            train_config["backbone_lr_factor"] = tl_cfg.get("backbone_lr_factor", 1.0)
+
         garch_model, garch_history = train_model(gX_train, gy_train, garch_model, train_config, task="regression")
         torch.save(garch_model.state_dict(), garch_ckpt_path)
         logger.info("  → GARCH checkpoint saved to %s", garch_ckpt_path)

@@ -24,6 +24,18 @@ For each test sample, the CNN predicts k, the GPD is fitted at that k to obtain 
 
 Performance improves with larger samples as expected. Student-t is the hardest family (~25% RMSE) because its tails are lighter than what GPD naturally fits, causing systematic overestimation. Pareto and mixtures are easiest (~5-11%) since their tails match GPD theory.
 
+**Baseline vs CNN agreement rate:**
+
+Agreement rate measures P(|k_hat - k*| <= r), the fraction of CNN predictions within radius r of the baseline k*:
+
+| Sample size | Agree@5 | Agree@10 |
+|-------------|---------|----------|
+| n=1000      | 53.2%   | 76.8%    |
+| n=2000      | 26.1%   | 45.5%    |
+| n=5000      | 5.8%    | 13.6%    |
+
+Rates drop with sample size because the candidate k-grid grows proportionally (from 121 values at n=1000 to 721 at n=5000), so a fixed radius covers a shrinking fraction of the range. This does not indicate worse model quality: the quantile RMSE table above shows accuracy *improving* with n, because neighboring thresholds in stable xi(k) regions produce nearly identical GPD fits.
+
 **Expected Shortfall (ES) relative RMSE (p=0.99):**
 
 ES is computed from the GPD closed-form formula ES(p) = (VaR(p) + beta - xi * u) / (1 - xi) and compared against Monte Carlo ground truth (10M samples). ES errors are larger than VaR errors because ES depends on the entire tail shape beyond the quantile, amplifying estimation errors in xi and beta.

@@ -22,6 +22,8 @@ pot:
   k_max_frac: 0.15
   delta: 5
   weights: [1.0, 1.0, 1.0]
+  decluster: true
+  decluster_run_length: 10
 
 model:
   task: regression       # 'classification' or 'regression'
@@ -54,6 +56,12 @@ diff_pot:
   patience: 30
   warm_start_from: null
   xi_clamp: [-0.5, 0.95]
+
+transfer_learning:
+  enabled: true
+  pretrained_path: "outputs/checkpoints/model_regression.pt"
+  freeze_backbone_epochs: 0
+  backbone_lr_factor: 0.1
 
 realdata:
   tickers: ["^GSPC", "^IXIC", "^FTSE", "^N225", "^GDAXI"]
