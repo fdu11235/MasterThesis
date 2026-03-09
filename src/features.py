@@ -174,7 +174,12 @@ def build_dataset_regression(
         y_val = np.clip(y_val, 0.0, 1.0)
         labels.append(y_val)
 
-        meta.append({"k_min": k_min, "k_max": k_max, "n": n})
+        meta.append({
+            "k_min": k_min, "k_max": k_max, "n": n,
+            "window_idx": ds.get("window_idx"),
+            "end_date": ds.get("end_date"),
+            "dist_type": ds.get("dist_type", "unknown"),
+        })
 
     # Stack into (N, L_max, 3) then transpose to (N, 3, L_max)
     X_np = np.stack(feature_matrices, axis=0)

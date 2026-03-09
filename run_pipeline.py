@@ -19,32 +19,11 @@ import yaml
 from joblib import Parallel, delayed
 
 from src.synthetic import generate_all
-from src.pot import candidate_k_grid, compute_baseline_k_star
+from src.pot import process_one_dataset
 from src.features import build_dataset, build_dataset_regression
 from src.model import ThresholdCNN
 from src.train import train_model, predict
 from src.evaluate import evaluate_all, plot_results
-
-
-def _process_one_dataset(ds, pot_cfg):
-    """Process a single dataset through POT diagnostics (Steps 2-4)."""
-    samples = ds["samples"]
-    sorted_desc = np.sort(samples)[::-1]
-
-    k_grid = candidate_k_grid(
-        n=ds["n"],
-        k_min=pot_cfg["k_min"],
-        k_max_frac=pot_cfg["k_max_frac"],
-    )
-
-    _, diagnostics = compute_baseline_k_star(
-        sorted_desc=sorted_desc,
-        k_grid=k_grid,
-        delta=pot_cfg["delta"],
-        weights=tuple(pot_cfg["weights"]),
-    )
-
-    return (ds, diagnostics)
 
 
 def main():
@@ -108,7 +87,7 @@ def main():
         pot_cfg = config["pot"]
 
         all_diagnostics = Parallel(n_jobs=args.n_jobs, verbose=10)(
-            delayed(_process_one_dataset)(ds, pot_cfg) for ds in datasets
+            delayed(process_one_dataset)(ds, pot_cfg) for ds in datasets
         )
 
         with open(diagnostics_path, "wb") as f:

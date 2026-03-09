@@ -37,3 +37,12 @@ evaluate:
   agreement_radii: [5, 10]
   quantile_p: 0.99
   test_fraction: 0.2
+
+realdata:
+  tickers: ["^GSPC", "^IXIC", "^FTSE", "^N225", "^GDAXI"]
+  start: "1960-01-01"
+  end: "2025-12-31"
+  window_size: 1000
+  step_size: 50
+  backtest_horizon: 250
+  train_fraction: 0.8

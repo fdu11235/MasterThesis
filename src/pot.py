@@ -133,3 +133,36 @@ def compute_baseline_k_star(
         "k_star": k_star,
     }
     return k_star, diagnostics
+
+
+def process_one_dataset(ds, pot_cfg):
+    """Process a single dataset through POT diagnostics (Steps 2-4).
+
+    Parameters
+    ----------
+    ds : dict
+        Dataset dict with keys 'samples', 'n' (and optional metadata).
+    pot_cfg : dict
+        POT configuration with keys 'k_min', 'k_max_frac', 'delta', 'weights'.
+
+    Returns
+    -------
+    tuple of (ds, diagnostics)
+    """
+    samples = ds["samples"]
+    sorted_desc = np.sort(samples)[::-1]
+
+    k_grid = candidate_k_grid(
+        n=ds["n"],
+        k_min=pot_cfg["k_min"],
+        k_max_frac=pot_cfg["k_max_frac"],
+    )
+
+    _, diagnostics = compute_baseline_k_star(
+        sorted_desc=sorted_desc,
+        k_grid=k_grid,
+        delta=pot_cfg["delta"],
+        weights=tuple(pot_cfg["weights"]),
+    )
+
+    return (ds, diagnostics)
