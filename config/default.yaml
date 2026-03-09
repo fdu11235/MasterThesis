@@ -1,0 +1,38 @@
+synthetic:
+  sample_sizes: [1000, 2000, 5000]
+  n_replications: 200
+  seed: 42
+  distributions:
+    student_t:
+      df: [3, 4, 5]
+    pareto:
+      alpha: [1.5, 2.0, 3.0]
+    lognormal_pareto_mix:
+      lognormal_mu: 0.0
+      lognormal_sigma: 1.0
+      pareto_alpha: [1.5, 2.0]
+      mix_frac: 0.1
+    two_pareto:
+      alpha1: [2.0, 3.0]
+      alpha2: [1.0, 1.5]
+      changepoint_frac: 0.05
+
+pot:
+  k_min: 30
+  k_max_frac: 0.15
+  delta: 5
+  weights: [1.0, 1.0, 1.0]
+
+model:
+  channels: [16, 32]
+  kernel_size: 5
+  dropout: 0.2
+  lr: 0.001
+  batch_size: 64
+  max_epochs: 100
+  patience: 10
+
+evaluate:
+  agreement_radii: [5, 10]
+  quantile_p: 0.99
+  test_fraction: 0.2
