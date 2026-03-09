@@ -108,6 +108,7 @@ def main():
         # ── Step 6: Single train/test split, train one model ─────────────
         ckpt_path = "outputs/checkpoints/model_regression.pt"
         N = len(X)
+        torch.manual_seed(42)
         perm = torch.randperm(N)
         test_size = int(N * test_frac)
         test_idx = perm[:test_size]
@@ -121,7 +122,7 @@ def main():
         if not args.fresh and os.path.exists(ckpt_path):
             logger.info("[Step 6] Loading cached regression model from %s", ckpt_path)
             model = ThresholdCNN(
-                in_channels=4,
+                in_channels=7,
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
@@ -129,13 +130,14 @@ def main():
             )
             model.load_state_dict(torch.load(ckpt_path, weights_only=True))
             model.eval()
+            history = None
         else:
             logger.info(
                 "[Step 6] Training unified regression model (train=%d, test=%d) …",
                 len(X_train), len(X_test),
             )
             model = ThresholdCNN(
-                in_channels=4,
+                in_channels=7,
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
@@ -148,7 +150,7 @@ def main():
                 "patience": model_cfg["patience"],
                 "test_fraction": config["evaluate"]["test_fraction"],
             }
-            model = train_model(X_train, y_train, model, train_config, task="regression")
+            model, history = train_model(X_train, y_train, model, train_config, task="regression")
             torch.save(model.state_dict(), ckpt_path)
             logger.info("  → checkpoint saved to %s", ckpt_path)
 
@@ -190,15 +192,26 @@ def main():
             logger.info("    Agreement rates: %s", results['agreement'])
             logger.info("    Quantile RMSE:   %.4f", results['quantile_rmse'])
             logger.info("    Relative RMSE:   %.2f%%", results['relative_rmse'] * 100)
+            ci = results.get('relative_rmse_ci', (float('nan'), float('nan')))
+            logger.info("    Rel. RMSE 95%% CI: [%.2f%%, %.2f%%]", ci[0] * 100, ci[1] * 100)
             logger.info("    ES RMSE:         %.4f", results['es_rmse'])
             logger.info("    ES Rel. RMSE:    %.2f%%", results['es_relative_rmse'] * 100)
+            es_ci = results.get('es_relative_rmse_ci', (float('nan'), float('nan')))
+            logger.info("    ES Rel. RMSE 95%% CI: [%.2f%%, %.2f%%]", es_ci[0] * 100, es_ci[1] * 100)
+            logger.info("    k R²:            %.4f", results.get('k_r2', float('nan')))
+            logger.info("    k MAE:           %.2f", results.get('k_mae', float('nan')))
+            logger.info("    k Median AE:     %.2f", results.get('k_median_ae', float('nan')))
+            logger.info("    Quantile MAE:    %.4f", results.get('quantile_mae', float('nan')))
+            logger.info("    ES MAE:          %.4f", results.get('es_mae', float('nan')))
             for dist_type, metrics in results.get('rmse_by_dist', {}).items():
-                logger.info("    %s: RMSE=%.4f, RelRMSE=%.2f%%, ES_RMSE=%.4f, ES_RelRMSE=%.2f%%, n=%d",
+                logger.info("    %s: RMSE=%.4f, RelRMSE=%.2f%%, MAE=%.4f, ES_RMSE=%.4f, ES_RelRMSE=%.2f%%, n=%d",
                              dist_type, metrics['rmse'], metrics['relative_rmse'] * 100,
+                             metrics.get('mae', float('nan')),
                              metrics['es_rmse'], metrics['es_relative_rmse'] * 100, metrics['count'])
 
             fig_dir = f"outputs/figures/n{n_size}"
-            plot_results(results, grp_diags, fig_dir)
+            plot_results(results, grp_diags, fig_dir,
+                         k_pred=grp_k_pred, k_true=grp_k_true, history=history)
 
     else:
         # ── Classification path (original) ────────────────────────────────
@@ -218,6 +231,7 @@ def main():
             n_classes = len(k_grid)
             N = len(X)
 
+            torch.manual_seed(42)
             perm = torch.randperm(N)
             test_size = int(N * test_frac)
             test_idx = perm[:test_size]
@@ -232,7 +246,7 @@ def main():
             if not args.fresh and os.path.exists(ckpt_path):
                 logger.info("[Step 6] Loading cached model for n=%d from %s", n_size, ckpt_path)
                 model = ThresholdCNN(
-                    in_channels=4,
+                    in_channels=7,
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],
@@ -246,7 +260,7 @@ def main():
                     n_size, len(X_train), len(X_test), n_classes,
                 )
                 model = ThresholdCNN(
-                    in_channels=4,
+                    in_channels=7,
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],
@@ -259,7 +273,7 @@ def main():
                     "patience": model_cfg["patience"],
                     "test_fraction": config["evaluate"]["test_fraction"],
                 }
-                model = train_model(X_train, y_train, model, train_config)
+                model, _ = train_model(X_train, y_train, model, train_config)
                 torch.save(model.state_dict(), ckpt_path)
                 logger.info("  → checkpoint saved to %s", ckpt_path)
 

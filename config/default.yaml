@@ -25,13 +25,13 @@ pot:
 
 model:
   task: regression       # 'classification' or 'regression'
-  channels: [16, 32]
-  kernel_size: 5
+  channels: [32, 64]
+  kernel_size: 7
   dropout: 0.2
   lr: 0.001
   batch_size: 64
-  max_epochs: 200
-  patience: 15
+  max_epochs: 500
+  patience: 30
 
 evaluate:
   agreement_radii: [5, 10]
@@ -47,7 +47,7 @@ diff_pot:
   quantile_weights: [0.2, 0.3, 0.5]
   pinball_weight: 0.7
   es_weight: 0.3
-  k_aux_weight: 1.0
+  k_aux_weight: 0.0
   lr: 0.0005
   batch_size: 32
   max_epochs: 300
@@ -61,5 +61,5 @@ realdata:
   end: "2025-12-31"
   window_size: 1000
   step_size: 50
-  backtest_horizon: 250
+  backtest_horizon: 50
   train_fraction: 0.8

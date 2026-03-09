@@ -211,6 +211,62 @@ def mcneil_frey_test(future_returns, var_est, es_est):
     }
 
 
+def var_backtest_garch(sorted_desc, k, xi, beta, n, p, future_returns, forecast_vol):
+    """GARCH-conditional VaR/ES backtest.
+
+    Computes VaR/ES on standardized residuals, then scales by GARCH-forecasted
+    volatility to get time-varying VaR_t and ES_t.
+
+    Parameters
+    ----------
+    sorted_desc : ndarray
+        Standardized residuals sorted descending.
+    k : int
+        Number of exceedances.
+    xi, beta : float
+        GPD shape and scale parameters.
+    n : int
+        Sample size.
+    p : float
+        Quantile probability (e.g. 0.99).
+    future_returns : ndarray
+        Raw absolute returns in the backtest horizon.
+    forecast_vol : ndarray
+        GARCH-forecasted sigma for each future day.
+
+    Returns
+    -------
+    dict with var_z, es_z (residual-level), var_t, es_t (arrays),
+    n_violations, violation_rate, n_future, violations_binary.
+    """
+    var_z = pot_quantile(sorted_desc, k, xi, beta, n, p)
+    es_z = pot_es(sorted_desc, k, xi, beta, n, p)
+
+    # Truncate forecast_vol to match future_returns length
+    horizon = min(len(future_returns), len(forecast_vol))
+    future_returns = future_returns[:horizon]
+    fvol = forecast_vol[:horizon]
+
+    var_t = fvol * var_z  # time-varying VaR
+    es_t = fvol * es_z    # time-varying ES
+
+    violations = future_returns > var_t
+    n_violations = int(violations.sum())
+    n_future = len(future_returns)
+    violation_rate = n_violations / n_future if n_future > 0 else float('nan')
+
+    return {
+        "var_z": var_z,
+        "es_z": es_z,
+        "var_t": var_t,
+        "es_t": es_t,
+        "n_violations": n_violations,
+        "violation_rate": violation_rate,
+        "n_future": n_future,
+        "violations_binary": violations.astype(int),
+    }
+
+
 def _get_k_and_params(diag, k_value):
     """Look up GPD params for a given k in the diagnostics grid."""
     k_grid = np.asarray(diag["k_grid"])
@@ -222,7 +278,9 @@ def _get_k_and_params(diag, k_value):
 
 
 def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
-                  returns_lookup, config):
+                  returns_lookup, config,
+                  garch_test_data=None, garch_diagnostics_list=None,
+                  garch_k_pred=None, garch_k_baseline=None):
     """Full VaR backtesting evaluation.
 
     Parameters
@@ -239,6 +297,14 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
         Per-ticker dict with 'abs_returns' array.
     config : dict
         Must have 'realdata.backtest_horizon' and 'evaluate.quantile_p'.
+    garch_test_data : list[dict], optional
+        GARCH-filtered test-set window dicts.
+    garch_diagnostics_list : list[dict], optional
+        Corresponding GARCH diagnostics dicts.
+    garch_k_pred : ndarray, optional
+        CNN-predicted k values for GARCH-filtered data.
+    garch_k_baseline : ndarray, optional
+        Baseline k* values for GARCH-filtered data.
 
     Returns
     -------
@@ -256,13 +322,13 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
     sqrt_k = np.array([int(np.sqrt(ds["n"])) for ds in test_data])
     methods["fixed_sqrt_n"] = sqrt_k
 
-    results = {m: {"violations": [], "var_estimates": [], "es_estimates": [],
-                    "n_future_list": [], "tickers": [], "violations_binary": [],
-                    "future_returns_all": [], "var_all": [], "es_all": []}
-               for m in methods}
-    results["historical_sim"] = {"violations": [], "var_estimates": [], "es_estimates": [],
-                                  "n_future_list": [], "tickers": [], "violations_binary": [],
-                                  "future_returns_all": [], "var_all": [], "es_all": []}
+    def _empty_bucket():
+        return {"violations": [], "var_estimates": [], "es_estimates": [],
+                "n_future_list": [], "tickers": [], "violations_binary": [],
+                "future_returns_all": [], "var_all": [], "es_all": []}
+
+    results = {m: _empty_bucket() for m in methods}
+    results["historical_sim"] = _empty_bucket()
 
     n_skipped = 0
 
@@ -321,6 +387,59 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
         results["historical_sim"]["var_all"].extend([hist_var] * len(future_returns))
         results["historical_sim"]["es_all"].extend([hist_es] * len(future_returns))
 
+    # ── GARCH-conditional methods ──────────────────────────────────────────
+    if garch_test_data is not None and garch_diagnostics_list is not None:
+        garch_methods = {}
+        if garch_k_baseline is not None:
+            garch_methods["baseline_garch"] = garch_k_baseline
+        if garch_k_pred is not None:
+            garch_methods["cnn_garch"] = garch_k_pred
+
+        for m in garch_methods:
+            results[m] = _empty_bucket()
+
+        n_garch_skipped = 0
+        for i, (ds, diag) in enumerate(zip(garch_test_data, garch_diagnostics_list)):
+            ticker = ds["ticker"]
+            series_end_idx = ds["series_end_idx"]
+            full_returns = returns_lookup[ticker]["abs_returns"]
+            forecast_vol = ds.get("garch_forecast_vol")
+
+            future_start = series_end_idx
+            future_end = series_end_idx + backtest_horizon
+            if future_end > len(full_returns) or forecast_vol is None:
+                n_garch_skipped += 1
+                continue
+
+            future_returns = full_returns[future_start:future_end]
+            sorted_desc = np.sort(ds["samples"])[::-1]
+            n = ds["n"]
+
+            for method_name, k_values in garch_methods.items():
+                k = int(k_values[i])
+                _, xi, beta = _get_k_and_params(diag, k)
+
+                if np.isnan(xi) or np.isnan(beta):
+                    continue
+
+                bt = var_backtest_garch(sorted_desc, k, xi, beta, n, p,
+                                        future_returns, forecast_vol)
+                results[method_name]["violations"].append(bt["violation_rate"])
+                results[method_name]["var_estimates"].append(float(np.mean(bt["var_t"])))
+                results[method_name]["es_estimates"].append(float(np.mean(bt["es_t"])))
+                results[method_name]["n_future_list"].append(bt["n_future"])
+                results[method_name]["tickers"].append(ticker)
+                results[method_name]["violations_binary"].extend(
+                    bt["violations_binary"].tolist()
+                )
+                results[method_name]["future_returns_all"].extend(future_returns[:bt["n_future"]].tolist())
+                results[method_name]["var_all"].extend(bt["var_t"].tolist())
+                results[method_name]["es_all"].extend(bt["es_t"].tolist())
+
+        if n_garch_skipped > 0:
+            logger.info("Skipped %d GARCH windows with insufficient future data",
+                        n_garch_skipped)
+
     if n_skipped > 0:
         logger.info("Skipped %d windows with insufficient future data", n_skipped)
 
@@ -370,10 +489,169 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
             "mcneil_frey": mf,
         }
 
-    return {"summary": summary, "details": results}
+    # ── Multi-level VaR coverage ────────────────────────────────────────────
+    p_levels = [0.95, 0.975, 0.99, 0.995]
+    multi_level = {}
+    for method_name, k_values in methods.items():
+        multi_level[method_name] = {}
+        for pl in p_levels:
+            viol_count = 0
+            total_count = 0
+            for i, (ds, diag) in enumerate(zip(test_data, diagnostics_list)):
+                ticker = ds["ticker"]
+                series_end_idx = ds["series_end_idx"]
+                full_returns = returns_lookup[ticker]["abs_returns"]
+                future_start = series_end_idx
+                future_end = series_end_idx + backtest_horizon
+                if future_end > len(full_returns):
+                    continue
+                future_returns = full_returns[future_start:future_end]
+                sorted_desc = np.sort(ds["samples"])[::-1]
+                n = ds["n"]
+                k = int(k_values[i])
+                _, xi, beta = _get_k_and_params(diag, k)
+                if np.isnan(xi) or np.isnan(beta):
+                    continue
+                var_est = pot_quantile(sorted_desc, k, xi, beta, n, pl)
+                n_viol = int((future_returns > var_est).sum())
+                viol_count += n_viol
+                total_count += len(future_returns)
+            if total_count > 0:
+                obs_rate = viol_count / total_count
+                kup = kupiec_test(obs_rate, total_count, pl)
+                multi_level[method_name][pl] = {
+                    "violation_rate": obs_rate,
+                    "expected": 1 - pl,
+                    "kupiec": kup,
+                }
+            else:
+                multi_level[method_name][pl] = {
+                    "violation_rate": float('nan'),
+                    "expected": 1 - pl,
+                    "kupiec": {},
+                }
+
+    # Historical simulation multi-level
+    multi_level["historical_sim"] = {}
+    for pl in p_levels:
+        viol_count = 0
+        total_count = 0
+        for i, (ds, diag) in enumerate(zip(test_data, diagnostics_list)):
+            ticker = ds["ticker"]
+            series_end_idx = ds["series_end_idx"]
+            full_returns = returns_lookup[ticker]["abs_returns"]
+            future_start = series_end_idx
+            future_end = series_end_idx + backtest_horizon
+            if future_end > len(full_returns):
+                continue
+            future_returns = full_returns[future_start:future_end]
+            hist_var = np.quantile(ds["samples"], pl)
+            n_viol = int((future_returns > hist_var).sum())
+            viol_count += n_viol
+            total_count += len(future_returns)
+        if total_count > 0:
+            obs_rate = viol_count / total_count
+            kup = kupiec_test(obs_rate, total_count, pl)
+            multi_level["historical_sim"][pl] = {
+                "violation_rate": obs_rate,
+                "expected": 1 - pl,
+                "kupiec": kup,
+            }
+        else:
+            multi_level["historical_sim"][pl] = {
+                "violation_rate": float('nan'),
+                "expected": 1 - pl,
+                "kupiec": {},
+            }
+
+    return {"summary": summary, "details": results, "multi_level": multi_level}
 
 
-def plot_real_results(results, save_dir):
+def plot_rolling_violations(results, save_dir):
+    """Plot rolling average violation rate per method over test windows.
+
+    Parameters
+    ----------
+    results : dict
+        Output of evaluate_real().
+    save_dir : str
+        Directory for figures.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    details = results.get("details", {})
+    summary = results.get("summary", {})
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    window_size = 20  # rolling window
+
+    for method in sorted(details.keys()):
+        violations = details[method].get("violations", [])
+        if len(violations) < window_size:
+            continue
+        vr_arr = np.array(violations)
+        rolling_avg = np.convolve(vr_arr, np.ones(window_size) / window_size, mode='valid')
+        ax.plot(rolling_avg, lw=1.2, alpha=0.8, label=method)
+
+    expected = list(summary.values())[0].get("expected_rate", 0.01) if summary else 0.01
+    ax.axhline(expected, color='red', ls='--', lw=1, label=f'Expected={expected:.3f}')
+    ax.set_xlabel("Window Index")
+    ax.set_ylabel(f"Rolling Violation Rate (window={window_size})")
+    ax.set_title("Rolling Average Violation Rate")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "rolling_violations.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_multi_level_coverage(results, save_dir):
+    """Grouped bar chart: observed vs expected violation rate at each p-level.
+
+    Parameters
+    ----------
+    results : dict
+        Output of evaluate_real() (must contain 'multi_level').
+    save_dir : str
+        Directory for figures.
+    """
+    multi_level = results.get("multi_level")
+    if not multi_level:
+        return
+    os.makedirs(save_dir, exist_ok=True)
+
+    methods = sorted(multi_level.keys())
+    p_levels = sorted(next(iter(multi_level.values())).keys())
+    n_methods = len(methods)
+    n_levels = len(p_levels)
+
+    fig, ax = plt.subplots(figsize=(max(8, n_levels * 2.5), 5))
+    x = np.arange(n_levels)
+    width = 0.8 / (n_methods + 1)  # +1 for expected bars
+
+    # Expected bars
+    expected_rates = [1 - pl for pl in p_levels]
+    ax.bar(x - 0.4 + width / 2, expected_rates, width, label="Expected",
+           color='red', alpha=0.3, edgecolor='red')
+
+    colors = plt.cm.Set2(np.linspace(0, 1, n_methods))
+    for j, method in enumerate(methods):
+        obs_rates = []
+        for pl in p_levels:
+            info = multi_level[method].get(pl, {})
+            obs_rates.append(info.get("violation_rate", float('nan')))
+        ax.bar(x - 0.4 + (j + 1.5) * width, obs_rates, width,
+               label=method, color=colors[j], edgecolor='black', lw=0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"p={pl}" for pl in p_levels])
+    ax.set_ylabel("Violation Rate")
+    ax.set_title("Multi-Level VaR Coverage")
+    ax.legend(fontsize=7, loc='upper left')
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "multi_level_coverage.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_real_results(results, save_dir, history=None, garch_history=None):
     """Generate bar chart of violation rates and save to disk.
 
     Parameters
@@ -382,6 +660,10 @@ def plot_real_results(results, save_dir):
         Output of evaluate_real().
     save_dir : str
         Directory for figures.
+    history : dict, optional
+        Training history for unconditional model.
+    garch_history : dict, optional
+        Training history for GARCH model.
     """
     os.makedirs(save_dir, exist_ok=True)
     summary = results["summary"]
@@ -396,8 +678,12 @@ def plot_real_results(results, save_dir):
     for m in methods:
         if m == "cnn":
             colors.append("#2196F3")
+        elif m == "cnn_garch":
+            colors.append("#1565C0")
         elif m == "baseline_k_star":
             colors.append("#4CAF50")
+        elif m == "baseline_garch":
+            colors.append("#2E7D32")
         else:
             colors.append("#9E9E9E")
 
@@ -435,7 +721,8 @@ def plot_real_results(results, save_dir):
 
     # 3. Per-ticker violation rate box plot across methods
     details = results.get("details", {})
-    plot_methods = ["cnn", "baseline_k_star", "fixed_sqrt_n", "historical_sim"]
+    plot_methods = ["cnn", "cnn_garch", "baseline_k_star", "baseline_garch",
+                    "fixed_sqrt_n", "historical_sim"]
     plot_methods = [m for m in plot_methods if m in details and details[m]["tickers"]]
 
     if plot_methods:
@@ -479,5 +766,16 @@ def plot_real_results(results, save_dir):
             fig.savefig(os.path.join(save_dir, 'violation_rates_by_ticker.png'), dpi=150,
                         bbox_inches='tight')
             plt.close(fig)
+
+    # New plots
+    plot_rolling_violations(results, save_dir)
+    plot_multi_level_coverage(results, save_dir)
+
+    # Training curves (import from evaluate.py)
+    from src.evaluate import plot_training_curves
+    if history is not None:
+        plot_training_curves(history, save_dir)
+    if garch_history is not None:
+        plot_training_curves(garch_history, os.path.join(save_dir, "garch"))
 
     logger.info("Real-data figures saved to %s", save_dir)

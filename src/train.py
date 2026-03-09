@@ -19,7 +19,7 @@ def train_model(X, y, model, config, task="classification"):
         task: 'classification' or 'regression'
 
     Returns:
-        trained model (with best weights loaded)
+        tuple of (trained model with best weights loaded, history dict)
     """
     test_frac = config.get('test_fraction', 0.2)
     n = len(X)
@@ -38,6 +38,9 @@ def train_model(X, y, model, config, task="classification"):
     )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.get('lr', 1e-3))
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6,
+    )
 
     if task == "regression":
         criterion = nn.SmoothL1Loss()
@@ -48,19 +51,31 @@ def train_model(X, y, model, config, task="classification"):
     patience_counter = 0
     patience = config.get('patience', 10)
     best_state = None
+    history = {"train_loss": [], "val_loss": [], "lr": []}
 
     for epoch in range(config.get('max_epochs', 100)):
         model.train()
+        epoch_train_loss = 0.0
+        n_batches = 0
         for xb, yb in train_loader:
             optimizer.zero_grad()
             loss = criterion(model(xb), yb)
             loss.backward()
             optimizer.step()
+            epoch_train_loss += loss.item()
+            n_batches += 1
+
+        avg_train_loss = epoch_train_loss / max(n_batches, 1)
+        history["train_loss"].append(avg_train_loss)
 
         model.eval()
         with torch.no_grad():
             val_out = model(X_val)
             val_loss = criterion(val_out, y_val).item()
+
+        history["val_loss"].append(val_loss)
+        scheduler.step(val_loss)
+        history["lr"].append(optimizer.param_groups[0]['lr'])
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -73,15 +88,16 @@ def train_model(X, y, model, config, task="classification"):
                 break
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
+            cur_lr = optimizer.param_groups[0]['lr']
             logger.info(
-                "Epoch %3d: val_loss=%.4f, best=%.4f, patience=%d/%d",
-                epoch + 1, val_loss, best_val_loss, patience_counter, patience,
+                "Epoch %3d: val_loss=%.4f, best=%.4f, patience=%d/%d, lr=%.1e",
+                epoch + 1, val_loss, best_val_loss, patience_counter, patience, cur_lr,
             )
 
     logger.info("Training complete — best val_loss=%.4f", best_val_loss)
     if best_state is not None:
         model.load_state_dict(best_state)
-    return model
+    return model, history
 
 
 def predict(model, X, task="classification"):

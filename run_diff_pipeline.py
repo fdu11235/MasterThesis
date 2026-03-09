@@ -242,7 +242,7 @@ def evaluate_pathway_a(test_groups, config):
 
     model_cfg = config['model']
     model_a = ThresholdCNN(
-        in_channels=4, channels=model_cfg['channels'],
+        in_channels=7, channels=model_cfg['channels'],
         kernel_size=model_cfg['kernel_size'],
         dropout=model_cfg['dropout'], task='regression',
     )
@@ -254,6 +254,7 @@ def evaluate_pathway_a(test_groups, config):
     all_var_pred, all_var_true = [], []
     all_es_pred, all_es_true = [], []
     all_dist_types = []
+    all_n_sizes = []
 
     for n_size, grp in sorted(test_groups.items()):
         features = grp['features']
@@ -278,6 +279,7 @@ def evaluate_pathway_a(test_groups, config):
             all_es_pred.append(es_est)
             all_es_true.append(grp['true_es'][i].item())
             all_dist_types.append(grp['dist_types'][i])
+            all_n_sizes.append(n_size)
 
     if not all_var_pred:
         return None
@@ -287,6 +289,7 @@ def evaluate_pathway_a(test_groups, config):
     es_pred = np.array(all_es_pred)
     es_true = np.array(all_es_true)
     dist_types = np.array(all_dist_types)
+    n_sizes = np.array(all_n_sizes)
 
     var_rel = (var_pred - var_true) / np.where(var_true != 0, var_true, 1.0)
     es_rel = (es_pred - es_true) / np.where(es_true != 0, es_true, 1.0)
@@ -296,11 +299,17 @@ def evaluate_pathway_a(test_groups, config):
         'es_rrmse': np.sqrt(np.mean(es_rel ** 2)),
         'var_rrmse_by_dist': {},
         'es_rrmse_by_dist': {},
+        'var_rrmse_by_n': {},
+        'es_rrmse_by_n': {},
     }
     for dt in sorted(set(dist_types)):
         mask = dist_types == dt
         results['var_rrmse_by_dist'][dt] = np.sqrt(np.mean(var_rel[mask] ** 2))
         results['es_rrmse_by_dist'][dt] = np.sqrt(np.mean(es_rel[mask] ** 2))
+    for ns in sorted(set(n_sizes)):
+        mask = n_sizes == ns
+        results['var_rrmse_by_n'][ns] = np.sqrt(np.mean(var_rel[mask] ** 2))
+        results['es_rrmse_by_n'][ns] = np.sqrt(np.mean(es_rel[mask] ** 2))
 
     return results
 
@@ -448,7 +457,7 @@ def main():
     ckpt_path = "outputs/checkpoints/model_diff.pt"
 
     model = DifferentiablePOTModel(
-        in_channels=4,
+        in_channels=7,
         channels=model_cfg.get('channels', [16, 32]),
         kernel_size=model_cfg.get('kernel_size', 5),
         dropout=model_cfg.get('dropout', 0.2),
@@ -499,6 +508,11 @@ def main():
                          dt,
                          res_a['var_rrmse_by_dist'][dt] * 100,
                          res_a['es_rrmse_by_dist'][dt] * 100)
+        for ns in sorted(res_a.get('var_rrmse_by_n', {})):
+            logger.info("    n=%d: VaR=%.2f%%  ES=%.2f%%",
+                         ns,
+                         res_a['var_rrmse_by_n'][ns] * 100,
+                         res_a['es_rrmse_by_n'][ns] * 100)
     else:
         logger.warning("  Pathway A model not found — skipping comparison")
 

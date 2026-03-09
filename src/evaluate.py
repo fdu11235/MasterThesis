@@ -7,6 +7,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy import stats
 
+from scipy.stats import genpareto
+
 from src.synthetic import (
     _generate_student_t, _generate_pareto,
     _generate_lognormal_pareto_mix, _generate_two_pareto,
@@ -169,6 +171,7 @@ def evaluate_all(test_data, k_pred, k_true, config):
         xi, beta = diag['params'][k_idx]
         if np.isnan(xi) or np.isnan(beta):
             continue
+        xi = np.clip(xi, -0.5, 0.95)  # stability clamp (mirrors diff_pot pipeline)
         n = ds['n']
         q_est.append(pot_quantile(sorted_desc, k, xi, beta, n, p))
         q_true.append(true_quantile(ds['dist_type'], ds['params'], p))
@@ -210,6 +213,38 @@ def evaluate_all(test_data, k_pred, k_true, config):
                 'count': int(mask.sum()),
             }
 
+        # Per-distribution MAE
+        for dist_type in sorted(set(dist_types)):
+            mask = np.array([d == dist_type for d in dist_types])
+            q_e = q_est_arr[mask]
+            q_t = q_true_arr[mask]
+            results['rmse_by_dist'][dist_type]['mae'] = float(np.mean(np.abs(q_e - q_t)))
+
+        # Quantile and ES MAE
+        results['quantile_mae'] = float(np.mean(np.abs(q_est_arr - q_true_arr)))
+        results['es_mae'] = float(np.mean(np.abs(es_est_arr - es_true_arr)))
+
+        # Bootstrap 95% CIs on relative_rmse and es_relative_rmse
+        n_boot = 1000
+        rng = np.random.RandomState(42)
+        n_samples = len(rel_errors)
+
+        boot_rel_rmse = np.empty(n_boot)
+        boot_es_rel_rmse = np.empty(n_boot)
+        for b in range(n_boot):
+            idx = rng.randint(0, n_samples, size=n_samples)
+            boot_rel_rmse[b] = np.sqrt(np.mean(rel_errors[idx] ** 2))
+            boot_es_rel_rmse[b] = np.sqrt(np.mean(es_rel_errors[idx] ** 2))
+
+        results['relative_rmse_ci'] = (
+            float(np.percentile(boot_rel_rmse, 2.5)),
+            float(np.percentile(boot_rel_rmse, 97.5)),
+        )
+        results['es_relative_rmse_ci'] = (
+            float(np.percentile(boot_es_rel_rmse, 2.5)),
+            float(np.percentile(boot_es_rel_rmse, 97.5)),
+        )
+
         # Store raw data for plotting
         results['_q_est'] = q_est
         results['_q_true'] = q_true
@@ -218,12 +253,29 @@ def evaluate_all(test_data, k_pred, k_true, config):
         results['_dist_types'] = dist_types
         results['_dist_params'] = dist_params
         results['_quantile_p'] = p
+        results['_rel_errors'] = rel_errors.tolist()
     else:
         results['quantile_rmse'] = float('nan')
         results['relative_rmse'] = float('nan')
         results['es_rmse'] = float('nan')
         results['es_relative_rmse'] = float('nan')
         results['rmse_by_dist'] = {}
+        results['quantile_mae'] = float('nan')
+        results['es_mae'] = float('nan')
+        results['relative_rmse_ci'] = (float('nan'), float('nan'))
+        results['es_relative_rmse_ci'] = (float('nan'), float('nan'))
+
+    # k prediction metrics
+    results['k_pred'] = k_pred
+    results['k_true'] = k_true
+    k_errors = k_pred.astype(float) - k_true.astype(float)
+    results['k_mae'] = float(np.mean(np.abs(k_errors)))
+    results['k_median_ae'] = float(np.median(np.abs(k_errors)))
+
+    # R² between k_pred and k_true
+    ss_res = np.sum(k_errors ** 2)
+    ss_tot = np.sum((k_true.astype(float) - np.mean(k_true)) ** 2)
+    results['k_r2'] = float(1 - ss_res / (ss_tot + 1e-10))
 
     logger.debug("Quantile RMSE: %.4f, Relative RMSE: %.2f%% (from %d / %d valid samples)",
                  results['quantile_rmse'], results['relative_rmse'] * 100,
@@ -232,13 +284,283 @@ def evaluate_all(test_data, k_pred, k_true, config):
     return results
 
 
-def plot_results(results, all_diagnostics, save_dir):
+def plot_training_curves(history, save_dir):
+    """Plot training/validation loss and learning rate curves.
+
+    Args:
+        history: dict with 'train_loss', 'val_loss', 'lr' lists
+        save_dir: directory to save figures
+    """
+    if history is None:
+        return
+    os.makedirs(save_dir, exist_ok=True)
+
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+
+    ax1.plot(epochs, history["train_loss"], label="Train loss", lw=1.2)
+    ax1.plot(epochs, history["val_loss"], label="Val loss", lw=1.2)
+    # Mark best epoch (early stop point)
+    best_epoch = int(np.argmin(history["val_loss"])) + 1
+    ax1.axvline(best_epoch, color='r', ls='--', lw=0.8,
+                label=f'Best epoch={best_epoch}')
+    ax1.set_ylabel("Loss")
+    ax1.legend(fontsize=9)
+    ax1.set_title("Training Curves")
+
+    ax2.plot(epochs, history["lr"], color='tab:green', lw=1.2)
+    ax2.set_ylabel("Learning Rate")
+    ax2.set_xlabel("Epoch")
+    ax2.set_yscale("log")
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "training_curves.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_pred_vs_true(k_pred, k_true, dist_types, save_dir):
+    """Scatter plot of predicted vs true k, colored by distribution type.
+
+    Args:
+        k_pred, k_true: arrays of predicted and true k values
+        dist_types: list of distribution type strings
+        save_dir: directory to save figures
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    unique_dists = sorted(set(dist_types))
+    colors = plt.cm.Set2(np.linspace(0, 1, max(len(unique_dists), 1)))
+
+    for j, dt in enumerate(unique_dists):
+        mask = np.array([d == dt for d in dist_types])
+        ax.scatter(k_true[mask], k_pred[mask], s=15, alpha=0.5,
+                   color=colors[j], label=dt)
+
+    lims = [min(k_true.min(), k_pred.min()), max(k_true.max(), k_pred.max())]
+    ax.plot(lims, lims, 'k--', lw=1, alpha=0.7, label='y=x')
+
+    # R²
+    ss_res = np.sum((k_pred.astype(float) - k_true.astype(float)) ** 2)
+    ss_tot = np.sum((k_true.astype(float) - np.mean(k_true)) ** 2)
+    r2 = 1 - ss_res / (ss_tot + 1e-10)
+    ax.set_title(f"Predicted vs True k  (R²={r2:.3f})")
+    ax.set_xlabel("k_true")
+    ax.set_ylabel("k_pred")
+    ax.legend(fontsize=8, markerscale=2)
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "pred_vs_true.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_residuals(k_pred, k_true, rel_errors, save_dir):
+    """Histogram of k prediction errors and quantile relative errors.
+
+    Args:
+        k_pred, k_true: arrays of predicted and true k values
+        rel_errors: list/array of relative quantile errors (fraction)
+        save_dir: directory to save figures
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    k_errors = k_pred.astype(float) - k_true.astype(float)
+    ax1.hist(k_errors, bins=40, edgecolor='black', alpha=0.7)
+    ax1.axvline(0, color='r', ls='--', lw=1)
+    ax1.set_xlabel("k_pred - k_true")
+    ax1.set_ylabel("Count")
+    ax1.set_title(f"k Prediction Error (MAE={np.mean(np.abs(k_errors)):.1f})")
+
+    rel_err = np.array(rel_errors) * 100
+    ax2.hist(rel_err, bins=40, edgecolor='black', alpha=0.7, color='tab:orange')
+    ax2.axvline(0, color='r', ls='--', lw=1)
+    ax2.set_xlabel("Relative Quantile Error (%)")
+    ax2.set_ylabel("Count")
+    ax2.set_title(f"Quantile Estimation Error (RRMSE={np.sqrt(np.mean(np.array(rel_errors)**2))*100:.1f}%)")
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "residuals.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_gpd_qq(test_data, k_pred, save_dir):
+    """QQ-plot of exceedances vs fitted GPD for representative samples.
+
+    Args:
+        test_data: list of (dataset_dict, diagnostics_dict)
+        k_pred: array of predicted k values
+        save_dir: directory to save figures
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    n_examples = min(4, len(test_data))
+    if n_examples == 0:
+        return
+
+    fig, axes = plt.subplots(1, n_examples, figsize=(4 * n_examples, 4))
+    if n_examples == 1:
+        axes = [axes]
+
+    # Pick evenly spaced samples
+    indices = np.linspace(0, len(test_data) - 1, n_examples, dtype=int)
+
+    for ax_idx, i in enumerate(indices):
+        ds, diag = test_data[i]
+        sorted_desc = np.sort(ds['samples'])[::-1]
+        k = int(k_pred[i])
+        k_idx = np.searchsorted(diag['k_grid'], k)
+        k_idx = min(k_idx, len(diag['params']) - 1)
+        xi, beta = diag['params'][k_idx]
+
+        if np.isnan(xi) or np.isnan(beta):
+            axes[ax_idx].set_title("GPD fit failed")
+            continue
+
+        exceedances = sorted_desc[:k] - sorted_desc[k]
+        exc_sorted = np.sort(exceedances)
+        n_exc = len(exc_sorted)
+        probs = (np.arange(1, n_exc + 1) - 0.5) / n_exc
+        theoretical_q = genpareto.ppf(probs, xi, loc=0, scale=beta)
+
+        axes[ax_idx].scatter(theoretical_q, exc_sorted, s=8, alpha=0.6)
+        lims = [0, max(exc_sorted.max(), theoretical_q.max())]
+        axes[ax_idx].plot(lims, lims, 'r--', lw=1)
+        axes[ax_idx].set_xlabel("GPD quantiles")
+        axes[ax_idx].set_ylabel("Empirical quantiles")
+        dist_label = ds.get('dist_type', 'unknown')
+        axes[ax_idx].set_title(f"{dist_label} (k={k})")
+
+    fig.suptitle("GPD QQ-plots (CNN threshold)", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "gpd_qq.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_tail_fit(test_data, k_pred, save_dir):
+    """Log-log plot of empirical vs fitted GPD survival function.
+
+    Args:
+        test_data: list of (dataset_dict, diagnostics_dict)
+        k_pred: array of predicted k values
+        save_dir: directory to save figures
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    n_examples = min(4, len(test_data))
+    if n_examples == 0:
+        return
+
+    fig, axes = plt.subplots(1, n_examples, figsize=(4 * n_examples, 4))
+    if n_examples == 1:
+        axes = [axes]
+
+    indices = np.linspace(0, len(test_data) - 1, n_examples, dtype=int)
+
+    for ax_idx, i in enumerate(indices):
+        ds, diag = test_data[i]
+        sorted_desc = np.sort(ds['samples'])[::-1]
+        k = int(k_pred[i])
+        k_idx = np.searchsorted(diag['k_grid'], k)
+        k_idx = min(k_idx, len(diag['params']) - 1)
+        xi, beta = diag['params'][k_idx]
+
+        if np.isnan(xi) or np.isnan(beta):
+            axes[ax_idx].set_title("GPD fit failed")
+            continue
+
+        exceedances = sorted_desc[:k] - sorted_desc[k]
+        exc_sorted = np.sort(exceedances)[::-1]
+        n_exc = len(exc_sorted)
+
+        # Empirical survival
+        emp_surv = np.arange(1, n_exc + 1) / n_exc
+        # Fitted GPD survival
+        fitted_surv = 1 - genpareto.cdf(exc_sorted, xi, loc=0, scale=beta)
+
+        axes[ax_idx].loglog(exc_sorted, emp_surv, '.', ms=4, alpha=0.5, label='Empirical')
+        axes[ax_idx].loglog(exc_sorted, np.clip(fitted_surv, 1e-10, 1), '-', lw=1.2,
+                            color='red', label='GPD fit')
+        axes[ax_idx].set_xlabel("Exceedance")
+        axes[ax_idx].set_ylabel("Survival P(X > x)")
+        dist_label = ds.get('dist_type', 'unknown')
+        axes[ax_idx].set_title(f"{dist_label} (k={k})")
+        axes[ax_idx].legend(fontsize=8)
+
+    fig.suptitle("Tail Fit: Empirical vs GPD Survival", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "tail_fit.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_mean_excess(test_data, k_pred, save_dir):
+    """Mean excess function plot with CNN-selected threshold marked.
+
+    Args:
+        test_data: list of (dataset_dict, diagnostics_dict)
+        k_pred: array of predicted k values
+        save_dir: directory to save figures
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    n_examples = min(4, len(test_data))
+    if n_examples == 0:
+        return
+
+    fig, axes = plt.subplots(1, n_examples, figsize=(4 * n_examples, 4))
+    if n_examples == 1:
+        axes = [axes]
+
+    indices = np.linspace(0, len(test_data) - 1, n_examples, dtype=int)
+
+    for ax_idx, i in enumerate(indices):
+        ds, diag = test_data[i]
+        sorted_desc = np.sort(ds['samples'])[::-1]
+        k = int(k_pred[i])
+        n = len(sorted_desc)
+
+        # Compute mean excess function over a range of thresholds
+        n_points = min(200, n - 2)
+        thresholds = np.sort(ds['samples'])[int(n * 0.5):]  # upper 50%
+        step = max(1, len(thresholds) // n_points)
+        thresholds = thresholds[::step]
+
+        me_vals = []
+        me_thresh = []
+        for u in thresholds:
+            above = ds['samples'][ds['samples'] > u]
+            if len(above) < 5:
+                continue
+            me_vals.append(np.mean(above - u))
+            me_thresh.append(u)
+
+        if me_vals:
+            axes[ax_idx].plot(me_thresh, me_vals, lw=1.2)
+            # Mark CNN threshold
+            cnn_threshold = sorted_desc[k] if k < len(sorted_desc) else sorted_desc[-1]
+            axes[ax_idx].axvline(cnn_threshold, color='r', ls='--', lw=1,
+                                label=f'CNN u(k={k})')
+            axes[ax_idx].set_xlabel("Threshold u")
+            axes[ax_idx].set_ylabel("Mean Excess e(u)")
+            dist_label = ds.get('dist_type', 'unknown')
+            axes[ax_idx].set_title(f"{dist_label}")
+            axes[ax_idx].legend(fontsize=8)
+
+    fig.suptitle("Mean Excess Function", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(save_dir, "mean_excess.png"), dpi=150)
+    plt.close(fig)
+
+
+def plot_results(results, all_diagnostics, save_dir,
+                 k_pred=None, k_true=None, history=None):
     """Generate and save evaluation plots.
 
     Args:
         results: dict from evaluate_all
         all_diagnostics: list of (dataset_dict, diagnostics_dict)
         save_dir: directory to save figures
+        k_pred: optional ndarray of predicted k values
+        k_true: optional ndarray of true k values
+        history: optional training history dict
     """
     os.makedirs(save_dir, exist_ok=True)
 
@@ -358,5 +680,21 @@ def plot_results(results, all_diagnostics, save_dir):
         fig.tight_layout()
         fig.savefig(os.path.join(save_dir, 'quantile_error_boxplot.png'), dpi=150)
         plt.close(fig)
+
+    # New plots: training curves, pred vs true, residuals, GPD QQ, tail fit, mean excess
+    if history is not None:
+        plot_training_curves(history, save_dir)
+
+    if k_pred is not None and k_true is not None:
+        dist_types_plot = results.get('_dist_types', ['unknown'] * len(k_pred))
+        plot_pred_vs_true(k_pred, k_true, dist_types_plot, save_dir)
+
+        rel_errors = results.get('_rel_errors', [])
+        if rel_errors:
+            plot_residuals(k_pred, k_true, rel_errors, save_dir)
+
+        plot_gpd_qq(all_diagnostics, k_pred, save_dir)
+        plot_tail_fit(all_diagnostics, k_pred, save_dir)
+        plot_mean_excess(all_diagnostics, k_pred, save_dir)
 
     logger.info("Figures saved to %s", save_dir)

@@ -41,9 +41,14 @@ def load_returns(tickers, start, end, cache_dir="outputs/data"):
         csv_path = os.path.join(cache_dir, f"returns_{safe_name}.csv")
 
         if os.path.exists(csv_path):
-            logger.info("Loading cached returns for %s from %s", ticker, csv_path)
             df = pd.read_csv(csv_path, parse_dates=["date"])
-        else:
+            if "signed_return" not in df.columns:
+                logger.info("Cached CSV for %s missing signed_return, re-downloading", ticker)
+                os.remove(csv_path)
+            else:
+                logger.info("Loading cached returns for %s from %s", ticker, csv_path)
+
+        if not os.path.exists(csv_path):
             logger.info("Downloading %s from %s to %s …", ticker, start, end)
             data = yf.download(ticker, start=start, end=end, auto_adjust=True,
                                progress=False)
@@ -61,6 +66,7 @@ def load_returns(tickers, start, end, cache_dir="outputs/data"):
             df = pd.DataFrame({
                 "date": abs_ret.index,
                 "abs_return": abs_ret.values,
+                "signed_return": log_ret.values,
             }).reset_index(drop=True)
 
             df.to_csv(csv_path, index=False)
@@ -152,10 +158,12 @@ def prepare_real_datasets(config, cache_dir="outputs/data"):
     for ticker, df in ticker_data.items():
         abs_ret = df["abs_return"].values
         dates = df["date"].values
+        signed_ret = df["signed_return"].values if "signed_return" in df.columns else None
 
         returns_lookup[ticker] = {
             "abs_returns": abs_ret,
             "dates": dates,
+            "signed_returns": signed_ret,
         }
 
         windows = rolling_windows(abs_ret, dates, window_size, step_size, ticker)
@@ -164,3 +172,68 @@ def prepare_real_datasets(config, cache_dir="outputs/data"):
 
     logger.info("Total real-data windows: %d", len(datasets))
     return datasets, returns_lookup
+
+
+def prepare_real_datasets_garch(config, returns_lookup, datasets, cache_dir="outputs/data"):
+    """Build GARCH-filtered rolling windows from existing real datasets.
+
+    For each window, fits GARCH(1,1) to the signed returns within the window,
+    then replaces the samples with |standardized residuals| and stores the
+    forecasted conditional volatilities for the backtest horizon.
+
+    Parameters
+    ----------
+    config : dict
+        Must contain 'realdata' section with backtest_horizon.
+    returns_lookup : dict
+        Per-ticker dict with 'signed_returns' and 'abs_returns' arrays.
+    datasets : list[dict]
+        Original unconditional rolling-window datasets.
+    cache_dir : str
+        Directory for caching.
+
+    Returns
+    -------
+    garch_datasets : list[dict]
+        GARCH-filtered window datasets. Each has 'samples' = |z_t|,
+        'garch_forecast_vol', and 'garch_converged' fields.
+    """
+    from src.garch import fit_garch_and_filter
+
+    backtest_horizon = config["realdata"]["backtest_horizon"]
+    garch_datasets = []
+    n_converged = 0
+
+    for ds in datasets:
+        ticker = ds["ticker"]
+        series_end_idx = ds["series_end_idx"]
+        window_size = ds["n"]
+
+        signed_ret = returns_lookup[ticker].get("signed_returns")
+        if signed_ret is None:
+            logger.warning("No signed returns for %s, skipping GARCH window", ticker)
+            continue
+
+        # Extract signed returns for this window
+        window_start = series_end_idx - window_size
+        window_signed = signed_ret[window_start:series_end_idx]
+
+        if len(window_signed) != window_size:
+            continue
+
+        garch_result = fit_garch_and_filter(window_signed,
+                                            forecast_horizon=backtest_horizon)
+
+        garch_ds = dict(ds)  # shallow copy
+        garch_ds["samples"] = garch_result["abs_std_residuals"].copy()
+        garch_ds["garch_forecast_vol"] = garch_result["forecast_vol"]
+        garch_ds["garch_converged"] = garch_result["converged"]
+        garch_ds["garch_conditional_vol"] = garch_result["conditional_vol"]
+
+        garch_datasets.append(garch_ds)
+        if garch_result["converged"]:
+            n_converged += 1
+
+    logger.info("GARCH-filtered windows: %d total, %d converged",
+                len(garch_datasets), n_converged)
+    return garch_datasets

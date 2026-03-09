@@ -129,6 +129,60 @@ def _min_max_normalize(s: NDArray) -> NDArray:
     return (s - s.min()) / (s.max() - s.min() + 1e-10)
 
 
+def hill_estimator(sorted_desc: NDArray, k_grid: NDArray) -> NDArray:
+    """Hill estimator of the tail index for each k.
+
+    H(k) = (1/k) * sum_{i=1}^{k} ln(X_{(i)} / X_{(k+1)})
+    Non-parametric estimate, independent from GPD-based xi.
+    """
+    result = np.empty(len(k_grid), dtype=float)
+    for i, k in enumerate(k_grid):
+        threshold = sorted_desc[k]
+        if threshold <= 0:
+            result[i] = np.nan
+            continue
+        log_ratios = np.log(sorted_desc[:k] / threshold)
+        result[i] = np.mean(log_ratios)
+    return result
+
+
+def qq_residual(sorted_desc: NDArray, k_grid: NDArray, params: NDArray) -> NDArray:
+    """QQ-plot residual RMSE for each k.
+
+    Compares empirical quantiles of exceedances vs fitted GPD quantiles.
+    Returns RMSE of the QQ deviation, capturing fit quality differently from AD.
+    """
+    result = np.empty(len(k_grid), dtype=float)
+    for i, k in enumerate(k_grid):
+        xi, beta = params[i]
+        if np.isnan(xi) or np.isnan(beta) or k < 5:
+            result[i] = np.nan
+            continue
+        exceedances = sorted_desc[:k] - sorted_desc[k]
+        exceedances_sorted = np.sort(exceedances)
+        n_exc = len(exceedances_sorted)
+        # Empirical quantiles
+        empirical_q = exceedances_sorted
+        # Theoretical GPD quantiles at the same probability points
+        probs = (np.arange(1, n_exc + 1) - 0.5) / n_exc
+        theoretical_q = genpareto.ppf(probs, xi, loc=0, scale=beta)
+        # RMSE of QQ deviation
+        result[i] = np.sqrt(np.mean((empirical_q - theoretical_q) ** 2))
+    return result
+
+
+def mean_excess_values(sorted_desc: NDArray, k_grid: NDArray) -> NDArray:
+    """Raw mean of exceedances at each threshold k.
+
+    e(k) = (1/k) * sum_{i=1}^{k} (X_{(i)} - X_{(k+1)})
+    """
+    result = np.empty(len(k_grid), dtype=float)
+    for i, k in enumerate(k_grid):
+        exceedances = sorted_desc[:k] - sorted_desc[k]
+        result[i] = np.mean(exceedances)
+    return result
+
+
 def compute_baseline_k_star(
     sorted_desc: NDArray,
     k_grid: NDArray,
@@ -177,6 +231,11 @@ def compute_baseline_k_star(
         k_star, idx, len(k_grid), total[idx],
     )
 
+    # Compute additional diagnostic series for CNN channels
+    hill_series = hill_estimator(sorted_desc, k_grid)
+    qq_resid_series = qq_residual(sorted_desc, k_grid, params)
+    me_values = mean_excess_values(sorted_desc, k_grid)
+
     diagnostics = {
         "k_grid": k_grid,
         "params": params,
@@ -187,6 +246,9 @@ def compute_baseline_k_star(
         "score_penalty": s_pen,
         "total_score": total,
         "k_star": k_star,
+        "hill_series": hill_series,
+        "qq_residual_series": qq_resid_series,
+        "mean_excess_values": me_values,
     }
     return k_star, diagnostics
 

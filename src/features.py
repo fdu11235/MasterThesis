@@ -16,23 +16,35 @@ def build_feature_matrix(diagnostics: dict) -> np.ndarray:
     ----------
     diagnostics : dict
         Must contain:
-        - 'params'             : ndarray of shape (L, 2) with columns [xi_hat, beta_hat]
-        - 'score_gof'          : ndarray of shape (L,)
-        - 'score_mean_excess'  : ndarray of shape (L,)
+        - 'params'              : ndarray of shape (L, 2) with columns [xi_hat, beta_hat]
+        - 'score_gof'           : ndarray of shape (L,)
+        - 'score_mean_excess'   : ndarray of shape (L,)
+        - 'hill_series'         : ndarray of shape (L,)
+        - 'qq_residual_series'  : ndarray of shape (L,)
+        - 'mean_excess_values'  : ndarray of shape (L,)
 
     Returns
     -------
-    F : ndarray of shape (L, 4)
-        Columns are [xi_hat(k), beta_hat(k), S_gof(k), S_me(k)].
+    F : ndarray of shape (L, 7)
+        Columns are [xi_hat, beta_hat, S_gof, S_me, hill, qq_resid, me_values].
     """
     params = np.asarray(diagnostics["params"])                    # (L, 2)
     score_gof = np.asarray(diagnostics["score_gof"])              # (L,)
     score_me = np.asarray(diagnostics["score_mean_excess"])       # (L,)
+    hill = np.asarray(diagnostics["hill_series"])                 # (L,)
+    qq_resid = np.asarray(diagnostics["qq_residual_series"])      # (L,)
+    me_vals = np.asarray(diagnostics["mean_excess_values"])       # (L,)
 
     xi_hat = params[:, 0]
     beta_hat = params[:, 1]
 
-    F = np.column_stack([xi_hat, beta_hat, score_gof, score_me])  # (L, 4)
+    # Replace NaN values with 0 for CNN input stability
+    hill = np.nan_to_num(hill, nan=0.0)
+    qq_resid = np.nan_to_num(qq_resid, nan=0.0)
+    me_vals = np.nan_to_num(me_vals, nan=0.0)
+
+    F = np.column_stack([xi_hat, beta_hat, score_gof, score_me,
+                         hill, qq_resid, me_vals])                # (L, 7)
     return F
 
 
@@ -72,7 +84,7 @@ def build_dataset(
     -------
     datasets : dict[int, tuple[Tensor, Tensor]]
         Keyed by sample size *n*.  Each value is (X, y) where
-        - X has shape (N, C, L)  — channels-first for Conv1d (C=4)
+        - X has shape (N, C, L)  — channels-first for Conv1d (C=7)
         - y has shape (N,)       — class indices into k_grid
     """
     # Group entries by sample size
@@ -135,7 +147,7 @@ def build_dataset_regression(
 
     Returns
     -------
-    X : Tensor of shape (N, C, L_max) — zero-padded feature matrices (C=4 channels)
+    X : Tensor of shape (N, C, L_max) — zero-padded feature matrices (C=7 channels)
     y : Tensor of shape (N,) float32 — normalized k* in [0, 1]
     meta : list of dict — per-sample metadata with k_min, k_max, n
     """
