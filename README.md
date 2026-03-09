@@ -14,13 +14,15 @@ The CNN is trained on 7,200 synthetic datasets (4 distribution families, 3 sampl
 
 **Relative RMSE of quantile estimates (p=0.99):**
 
+For each test sample, the CNN predicts k, the GPD is fitted at that k to obtain parameters (xi, beta), and the POT quantile formula gives an estimate of the 99th percentile. This is compared against the true quantile (known analytically for Student-t/Pareto, or via Monte Carlo for mixtures). The relative RMSE normalizes the error by the true quantile so that results are comparable across distributions with very different tail magnitudes.
+
 | Sample size | Relative RMSE |
 |-------------|---------------|
 | n=1000 | 18.9% |
 | n=2000 | 16.2% |
 | n=5000 | 13.9% |
 
-Performance improves with larger samples as expected. Student-t is the hardest family (~25% RMSE) while lognormal-Pareto mixtures are easiest (~5-11%).
+Performance improves with larger samples as expected. Student-t is the hardest family (~25% RMSE) because its tails are lighter than what GPD naturally fits, causing systematic overestimation. Pareto and mixtures are easiest (~5-11%) since their tails match GPD theory.
 
 **Diagnostic curves** — xi(k), Anderson-Darling GOF(k), and composite Score(k) for example datasets (n=1000), with baseline k* marked:
 
