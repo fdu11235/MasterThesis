@@ -129,7 +129,7 @@ def main():
     if not args.fresh and os.path.exists(ckpt_path):
         logger.info("[Step 6] Loading cached model from %s", ckpt_path)
         model = ThresholdCNN(
-            in_channels=3,
+            in_channels=4,
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
@@ -141,7 +141,7 @@ def main():
         logger.info("[Step 6] Training regression model (train=%d, test=%d) …",
                      len(X_train), len(X_test))
         model = ThresholdCNN(
-            in_channels=3,
+            in_channels=4,
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
@@ -199,8 +199,14 @@ def main():
                    f"p={kup.get('p_value', 'N/A'):.4f}, "
                    f"reject={kup.get('reject_5pct', 'N/A')}"
                    if kup else "N/A")
-        logger.info("  %-20s: VR=%.4f (expected=%.4f), n=%d, Kupiec: %s",
-                     method, vr, expected, n_win, kup_str)
+        chris = stats.get("christoffersen", {})
+        chris_str = (f"LR={chris.get('lr_ind', 'N/A'):.2f}, "
+                     f"p={chris.get('p_value_ind', 'N/A'):.4f}, "
+                     f"reject={chris.get('reject_ind_5pct', 'N/A')}"
+                     if chris else "N/A")
+        logger.info("  %-20s: VR=%.4f (expected=%.4f), n=%d", method, vr, expected, n_win)
+        logger.info("    Kupiec:          %s", kup_str)
+        logger.info("    Christoffersen:  %s", chris_str)
     logger.info("=" * 60)
 
     # Plot

@@ -15,9 +15,10 @@ class TestBuildFeatureMatrix:
         diagnostics = {
             "params": np.random.randn(L, 2),
             "score_gof": np.random.rand(L),
+            "score_mean_excess": np.random.rand(L),
         }
         F = build_feature_matrix(diagnostics)
-        assert F.shape == (L, 3)
+        assert F.shape == (L, 4)
 
 
 class TestNormalizeFeatures:
@@ -52,6 +53,7 @@ class TestBuildDataset:
                 "k_grid": k_grid,
                 "params": np.random.randn(L, 2),
                 "score_gof": np.random.rand(L),
+                "score_mean_excess": np.random.rand(L),
                 "k_star": int(k_grid[L // 2]),
             }
             all_diagnostics.append((dataset_dict, diagnostics_dict))
@@ -59,7 +61,7 @@ class TestBuildDataset:
         datasets = build_dataset(all_diagnostics, config={})
         assert sample_size in datasets
         X, y = datasets[sample_size]
-        assert X.shape == (n_samples, 3, L)
+        assert X.shape == (n_samples, 4, L)
         assert y.shape == (n_samples,)
         assert X.dtype == torch.float32
         assert y.dtype == torch.long

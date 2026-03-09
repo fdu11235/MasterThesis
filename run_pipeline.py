@@ -121,7 +121,7 @@ def main():
         if not args.fresh and os.path.exists(ckpt_path):
             logger.info("[Step 6] Loading cached regression model from %s", ckpt_path)
             model = ThresholdCNN(
-                in_channels=3,
+                in_channels=4,
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
@@ -135,7 +135,7 @@ def main():
                 len(X_train), len(X_test),
             )
             model = ThresholdCNN(
-                in_channels=3,
+                in_channels=4,
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
@@ -229,7 +229,7 @@ def main():
             if not args.fresh and os.path.exists(ckpt_path):
                 logger.info("[Step 6] Loading cached model for n=%d from %s", n_size, ckpt_path)
                 model = ThresholdCNN(
-                    in_channels=3,
+                    in_channels=4,
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],
@@ -243,7 +243,7 @@ def main():
                     n_size, len(X_train), len(X_test), n_classes,
                 )
                 model = ThresholdCNN(
-                    in_channels=3,
+                    in_channels=4,
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],

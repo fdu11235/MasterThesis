@@ -16,21 +16,23 @@ def build_feature_matrix(diagnostics: dict) -> np.ndarray:
     ----------
     diagnostics : dict
         Must contain:
-        - 'params'    : ndarray of shape (L, 2) with columns [xi_hat, beta_hat]
-        - 'score_gof' : ndarray of shape (L,)
+        - 'params'             : ndarray of shape (L, 2) with columns [xi_hat, beta_hat]
+        - 'score_gof'          : ndarray of shape (L,)
+        - 'score_mean_excess'  : ndarray of shape (L,)
 
     Returns
     -------
-    F : ndarray of shape (L, 3)
-        Columns are [xi_hat(k), beta_hat(k), S_gof(k)].
+    F : ndarray of shape (L, 4)
+        Columns are [xi_hat(k), beta_hat(k), S_gof(k), S_me(k)].
     """
-    params = np.asarray(diagnostics["params"])        # (L, 2)
-    score_gof = np.asarray(diagnostics["score_gof"])  # (L,)
+    params = np.asarray(diagnostics["params"])                    # (L, 2)
+    score_gof = np.asarray(diagnostics["score_gof"])              # (L,)
+    score_me = np.asarray(diagnostics["score_mean_excess"])       # (L,)
 
     xi_hat = params[:, 0]
     beta_hat = params[:, 1]
 
-    F = np.column_stack([xi_hat, beta_hat, score_gof])  # (L, 3)
+    F = np.column_stack([xi_hat, beta_hat, score_gof, score_me])  # (L, 4)
     return F
 
 
@@ -39,11 +41,11 @@ def normalize_features(F: np.ndarray) -> np.ndarray:
 
     Parameters
     ----------
-    F : ndarray of shape (L, 3)
+    F : ndarray of shape (L, C)
 
     Returns
     -------
-    F_norm : ndarray of shape (L, 3)
+    F_norm : ndarray of shape (L, C)
         Each column transformed as (col - mean) / (std + 1e-10).
     """
     mean = F.mean(axis=0)
@@ -70,7 +72,7 @@ def build_dataset(
     -------
     datasets : dict[int, tuple[Tensor, Tensor]]
         Keyed by sample size *n*.  Each value is (X, y) where
-        - X has shape (N, 3, L)  — channels-first for Conv1d
+        - X has shape (N, C, L)  — channels-first for Conv1d (C=4)
         - y has shape (N,)       — class indices into k_grid
     """
     # Group entries by sample size
@@ -89,7 +91,7 @@ def build_dataset(
             k_grid = np.asarray(diag["k_grid"])
             k_star = diag["k_star"]
 
-            # Build and normalize feature matrix  (L, 3)
+            # Build and normalize feature matrix  (L, C)
             F = build_feature_matrix(diag)
             F = normalize_features(F)
             feature_matrices.append(F)
@@ -99,7 +101,7 @@ def build_dataset(
             label = min(label, len(k_grid) - 1)
             labels.append(label)
 
-        # Stack into (N, L, 3) then transpose to (N, 3, L) for Conv1d
+        # Stack into (N, L, C) then transpose to (N, C, L) for Conv1d
         X_np = np.stack(feature_matrices, axis=0)   # (N, L, 3)
         X = torch.tensor(X_np, dtype=torch.float32)  # (N, L, 3)
         X = X.permute(0, 2, 1)                       # (N, 3, L)
@@ -133,7 +135,7 @@ def build_dataset_regression(
 
     Returns
     -------
-    X : Tensor of shape (N, 3, L_max) — zero-padded feature matrices
+    X : Tensor of shape (N, C, L_max) — zero-padded feature matrices (C=4 channels)
     y : Tensor of shape (N,) float32 — normalized k* in [0, 1]
     meta : list of dict — per-sample metadata with k_min, k_max, n
     """
@@ -154,7 +156,7 @@ def build_dataset_regression(
         k_min = int(k_grid[0])
         k_max = int(k_grid[-1])
 
-        # Build and normalize feature matrix (L, 3)
+        # Build and normalize feature matrix (L, C)
         F = build_feature_matrix(diag)
         F = normalize_features(F)
 
@@ -181,7 +183,7 @@ def build_dataset_regression(
             "dist_type": ds.get("dist_type", "unknown"),
         })
 
-    # Stack into (N, L_max, 3) then transpose to (N, 3, L_max)
+    # Stack into (N, L_max, C) then transpose to (N, C, L_max)
     X_np = np.stack(feature_matrices, axis=0)
     X = torch.tensor(X_np, dtype=torch.float32).permute(0, 2, 1)
     y = torch.tensor(labels, dtype=torch.float32)

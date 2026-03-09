@@ -110,6 +110,7 @@ def evaluate_all(test_data, k_pred, k_true, config):
     q_est = []
     q_true = []
     dist_types = []
+    dist_params = []
     for i, (ds, diag) in enumerate(test_data):
         sorted_desc = np.sort(ds['samples'])[::-1]
         k = k_pred[i]
@@ -122,6 +123,7 @@ def evaluate_all(test_data, k_pred, k_true, config):
         q_est.append(pot_quantile(sorted_desc, k, xi, beta, n, p))
         q_true.append(true_quantile(ds['dist_type'], ds['params'], p))
         dist_types.append(ds['dist_type'])
+        dist_params.append(ds['params'])
 
     if q_est:
         q_est_arr = np.array(q_est)
@@ -143,6 +145,13 @@ def evaluate_all(test_data, k_pred, k_true, config):
                 'relative_rmse': np.sqrt(np.mean(((q_e - q_t) / q_t) ** 2)),
                 'count': int(mask.sum()),
             }
+
+        # Store raw data for plotting
+        results['_q_est'] = q_est
+        results['_q_true'] = q_true
+        results['_dist_types'] = dist_types
+        results['_dist_params'] = dist_params
+        results['_quantile_p'] = p
     else:
         results['quantile_rmse'] = float('nan')
         results['relative_rmse'] = float('nan')
@@ -177,9 +186,9 @@ def plot_results(results, all_diagnostics, save_dir):
     fig.savefig(os.path.join(save_dir, 'agreement_rates.png'), dpi=150)
     plt.close(fig)
 
-    # 2. Example xi(k) and Score(k) curves (first 4 datasets)
+    # 2. Example diagnostic curves: xi(k), GOF(k), Score(k) (first 4 datasets)
     n_examples = min(4, len(all_diagnostics))
-    fig, axes = plt.subplots(n_examples, 2, figsize=(12, 3 * n_examples))
+    fig, axes = plt.subplots(n_examples, 3, figsize=(16, 3 * n_examples))
     if n_examples == 1:
         axes = axes[np.newaxis, :]
     for i in range(n_examples):
@@ -188,19 +197,98 @@ def plot_results(results, all_diagnostics, save_dir):
 
         axes[i, 0].plot(k_grid, diag['xi_series'])
         axes[i, 0].axvline(diag['k_star'], color='r', ls='--', label=f'k*={diag["k_star"]}')
-        axes[i, 0].set_ylabel('xi_hat')
+        axes[i, 0].set_ylabel('xi_hat(k)')
         axes[i, 0].set_title(f'{ds["dist_type"]} n={ds["n"]}')
-        axes[i, 0].legend()
+        axes[i, 0].legend(fontsize=8)
 
-        axes[i, 1].plot(k_grid, diag['total_score'])
+        axes[i, 1].plot(k_grid, diag['score_gof'], color='tab:orange')
         axes[i, 1].axvline(diag['k_star'], color='r', ls='--', label=f'k*={diag["k_star"]}')
-        axes[i, 1].set_ylabel('Total Score')
-        axes[i, 1].legend()
+        axes[i, 1].set_ylabel('AD statistic')
+        axes[i, 1].set_title('GOF(k) — Anderson-Darling')
+        axes[i, 1].legend(fontsize=8)
 
-    axes[-1, 0].set_xlabel('k')
-    axes[-1, 1].set_xlabel('k')
+        axes[i, 2].plot(k_grid, diag['total_score'], color='tab:green')
+        axes[i, 2].axvline(diag['k_star'], color='r', ls='--', label=f'k*={diag["k_star"]}')
+        axes[i, 2].set_ylabel('Total Score')
+        axes[i, 2].set_title('Score(k)')
+        axes[i, 2].legend(fontsize=8)
+
+    for col in range(3):
+        axes[-1, col].set_xlabel('k')
     fig.tight_layout()
-    fig.savefig(os.path.join(save_dir, 'xi_and_score_curves.png'), dpi=150)
+    fig.savefig(os.path.join(save_dir, 'diagnostic_curves.png'), dpi=150)
     plt.close(fig)
+
+    # 3. Quantile error: predicted vs true scatter + per-distribution RMSE bars
+    p = results.get('_quantile_p', 0.99)
+    if 'rmse_by_dist' in results and results['rmse_by_dist']:
+        # 3a. Per-distribution relative RMSE bar chart
+        fig, ax = plt.subplots(figsize=(8, 4))
+        dist_names = sorted(results['rmse_by_dist'].keys())
+        rel_rmses = [results['rmse_by_dist'][d]['relative_rmse'] * 100 for d in dist_names]
+        counts = [results['rmse_by_dist'][d]['count'] for d in dist_names]
+        bars = ax.bar(dist_names, rel_rmses, color='tab:blue')
+        for bar, c in zip(bars, counts):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                    f'n={c}', ha='center', va='bottom', fontsize=9)
+        ax.set_ylabel('Relative RMSE (%)')
+        ax.set_title(f'Quantile Estimation Error by Distribution (p={p})')
+        ax.axhline(results['relative_rmse'] * 100, color='r', ls='--', lw=1,
+                    label=f'Overall: {results["relative_rmse"]*100:.1f}%')
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(os.path.join(save_dir, 'quantile_rmse_by_dist.png'), dpi=150)
+        plt.close(fig)
+
+    if '_q_est' in results and '_q_true' in results:
+        # 3b. Relative error box plot grouped by distribution + parameters
+        q_est = np.array(results['_q_est'])
+        q_true = np.array(results['_q_true'])
+        dist_types = results.get('_dist_types', [])
+        dist_params_list = results.get('_dist_params', [])
+        rel_errors = (q_est - q_true) / q_true * 100  # percentage
+
+        # Build group labels from dist_type + key params
+        def _make_label(dt, dp):
+            if dt == 'student_t':
+                return f't(df={dp.get("df", "?")})'
+            elif dt == 'pareto':
+                return f'Pareto(α={dp.get("alpha", "?")})'
+            elif dt == 'lognormal_pareto_mix':
+                return f'LN-Par(α={dp.get("pareto_alpha", "?")})'
+            elif dt == 'two_pareto':
+                return f'2Par({dp.get("alpha1", "?")},{dp.get("alpha2", "?")})'
+            return dt
+
+        labels = [_make_label(dt, dp) for dt, dp in zip(dist_types, dist_params_list)]
+
+        # Group by label, sorted by median true quantile
+        from collections import OrderedDict
+        groups = {}
+        for i, lab in enumerate(labels):
+            groups.setdefault(lab, {'rel_err': [], 'q_true': []})
+            groups[lab]['rel_err'].append(rel_errors[i])
+            groups[lab]['q_true'].append(q_true[i])
+
+        sorted_labels = sorted(groups.keys(),
+                                key=lambda l: np.median(groups[l]['q_true']))
+
+        box_data = [groups[l]['rel_err'] for l in sorted_labels]
+        tick_labels = [f'{l}\nQ={np.median(groups[l]["q_true"]):.1f}' for l in sorted_labels]
+
+        fig, ax = plt.subplots(figsize=(max(8, len(sorted_labels) * 1.2), 5))
+        bp = ax.boxplot(box_data, tick_labels=tick_labels, patch_artist=True,
+                        medianprops=dict(color='red', lw=1.5))
+        for patch in bp['boxes']:
+            patch.set_facecolor('tab:blue')
+            patch.set_alpha(0.6)
+        ax.axhline(0, color='k', ls='--', lw=0.8)
+        ax.set_ylabel('Relative Error (%)')
+        ax.set_xlabel('Distribution (sorted by true quantile)')
+        ax.set_title(f'POT Quantile Estimation Error by Distribution (p={p})')
+        plt.xticks(rotation=30, ha='right', fontsize=9)
+        fig.tight_layout()
+        fig.savefig(os.path.join(save_dir, 'quantile_error_boxplot.png'), dpi=150)
+        plt.close(fig)
 
     logger.info("Figures saved to %s", save_dir)

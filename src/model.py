@@ -5,7 +5,7 @@ import torch.nn as nn
 class ThresholdCNN(nn.Module):
     """1D CNN for predicting optimal k (threshold) from diagnostic features."""
 
-    def __init__(self, in_channels=3, channels=None, kernel_size=5, dropout=0.2,
+    def __init__(self, in_channels=4, channels=None, kernel_size=5, dropout=0.2,
                  n_classes=10, task="classification"):
         super().__init__()
         if channels is None:

@@ -12,8 +12,8 @@ class TestThresholdCNN:
 
     def test_forward_output_shape(self):
         batch, length, n_classes = 8, 40, 10
-        model = ThresholdCNN(in_channels=3, n_classes=n_classes)
-        x = torch.randn(batch, 3, length)
+        model = ThresholdCNN(in_channels=4, n_classes=n_classes)
+        x = torch.randn(batch, 4, length)
         out = model(x)
         assert out.shape == (batch, n_classes)
 
@@ -24,10 +24,10 @@ class TestThresholdCNN:
         length = 20
 
         model = ThresholdCNN(
-            in_channels=3, channels=[8, 16], kernel_size=3,
+            in_channels=4, channels=[8, 16], kernel_size=3,
             dropout=0.0, n_classes=n_classes,
         )
-        X = torch.randn(batch, 3, length)
+        X = torch.randn(batch, 4, length)
         y = torch.randint(0, n_classes, (batch,))
 
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)

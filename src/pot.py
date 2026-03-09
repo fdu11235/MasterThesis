@@ -4,7 +4,7 @@ import logging
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.stats import genpareto, kstest
+from scipy.stats import genpareto
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +51,71 @@ def score_stability(xi_series: NDArray, k_grid: NDArray, delta: int) -> NDArray:
     return scores
 
 
+def _anderson_darling_gpd(exceedances: NDArray, xi: float, beta: float) -> float:
+    """Anderson-Darling statistic for GPD fit.
+
+    AD = -n - (1/n) * sum_{i=1}^{n} (2i-1) * [ln(F(z_i)) + ln(1 - F(z_{n+1-i}))]
+    where z is sorted ascending and F is the fitted GPD CDF.
+    """
+    n = len(exceedances)
+    z = np.sort(exceedances)
+    F = genpareto.cdf(z, xi, loc=0, scale=beta)
+    # Clamp to avoid log(0)
+    F = np.clip(F, 1e-12, 1 - 1e-12)
+    i = np.arange(1, n + 1)
+    ad = -n - (1.0 / n) * np.sum((2 * i - 1) * (np.log(F) + np.log(1 - F[::-1])))
+    return ad
+
+
 def score_gof(sorted_desc: NDArray, k_grid: NDArray, params: NDArray) -> NDArray:
-    """KS statistic for each k. Returns 1.0 when params are NaN."""
+    """Anderson-Darling statistic for each k. Returns large value when params are NaN."""
     scores = np.empty(len(k_grid), dtype=float)
     for i, k in enumerate(k_grid):
         xi, beta = params[i]
         if np.isnan(xi) or np.isnan(beta):
-            scores[i] = 1.0
+            scores[i] = 100.0
             continue
         exceedances = sorted_desc[:k] - sorted_desc[k]
-        stat, _ = kstest(exceedances, "genpareto", args=(xi, 0, beta))
-        scores[i] = stat
+        scores[i] = _anderson_darling_gpd(exceedances, xi, beta)
+    return scores
+
+
+def score_mean_excess(sorted_desc: NDArray, k_grid: NDArray) -> NDArray:
+    """Mean excess linearity score for each k.
+
+    For GPD-distributed exceedances, the mean excess function e(u) = E[X-u | X>u]
+    is linear in u. We measure 1 - R² of a linear fit to the empirical mean excess
+    at sub-thresholds within the exceedances. Lower = more linear = better GPD fit.
+    """
+    scores = np.empty(len(k_grid), dtype=float)
+    for i, k in enumerate(k_grid):
+        exceedances = sorted_desc[:k] - sorted_desc[k]
+        if k < 10:
+            scores[i] = 1.0
+            continue
+        # Compute mean excess at ~10 sub-thresholds within exceedances
+        n_points = min(10, k // 2)
+        thresholds = np.linspace(0, np.percentile(exceedances, 80), n_points + 1)[:-1]
+        me_values = []
+        me_thresholds = []
+        for u in thresholds:
+            above = exceedances[exceedances > u]
+            if len(above) < 5:
+                continue
+            me_values.append(np.mean(above - u))
+            me_thresholds.append(u)
+        if len(me_values) < 3:
+            scores[i] = 1.0
+            continue
+        # Fit linear regression, compute R²
+        x = np.array(me_thresholds)
+        y = np.array(me_values)
+        coeffs = np.polyfit(x, y, 1)
+        y_pred = np.polyval(coeffs, x)
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - y.mean()) ** 2)
+        r2 = 1 - ss_res / (ss_tot + 1e-10)
+        scores[i] = 1 - max(r2, 0.0)
     return scores
 
 
@@ -101,6 +155,7 @@ def compute_baseline_k_star(
 
     s_stab = score_stability(xi_series, k_grid, delta)
     s_gof = score_gof(sorted_desc, k_grid, params)
+    s_me = score_mean_excess(sorted_desc, k_grid)
     s_pen = score_penalty(k_grid)
 
     # Min-max normalize each score to [0, 1]
@@ -128,6 +183,7 @@ def compute_baseline_k_star(
         "xi_series": xi_series,
         "score_stability": s_stab,
         "score_gof": s_gof,
+        "score_mean_excess": s_me,
         "score_penalty": s_pen,
         "total_score": total,
         "k_star": k_star,

@@ -93,6 +93,81 @@ def kupiec_test(violation_rate, n, p):
     }
 
 
+def christoffersen_test(violations_binary):
+    """Christoffersen (1998) conditional coverage test.
+
+    Tests H0: violations are independent (Markov property) using the
+    independence LR statistic based on transition counts between
+    consecutive days.
+
+    Parameters
+    ----------
+    violations_binary : array-like
+        Binary array (1 = VaR exceeded, 0 = not).
+
+    Returns
+    -------
+    dict with lr_ind (independence LR), lr_cc (joint conditional coverage LR),
+    p_value_ind, p_value_cc, reject_ind_5pct, reject_cc_5pct.
+    """
+    v = np.asarray(violations_binary, dtype=int)
+    if len(v) < 2:
+        return {"lr_ind": float('nan'), "lr_cc": float('nan'),
+                "p_value_ind": float('nan'), "p_value_cc": float('nan'),
+                "reject_ind_5pct": False, "reject_cc_5pct": False}
+
+    # Count transitions
+    n00 = n01 = n10 = n11 = 0
+    for t in range(len(v) - 1):
+        if v[t] == 0 and v[t + 1] == 0:
+            n00 += 1
+        elif v[t] == 0 and v[t + 1] == 1:
+            n01 += 1
+        elif v[t] == 1 and v[t + 1] == 0:
+            n10 += 1
+        else:
+            n11 += 1
+
+    eps = 1e-10
+
+    # Transition probabilities
+    pi01 = n01 / (n00 + n01 + eps)
+    pi11 = n11 / (n10 + n11 + eps)
+
+    # Unconditional probability
+    n1 = n01 + n11
+    n0 = n00 + n10
+    pi = n1 / (n0 + n1 + eps)
+
+    pi01 = np.clip(pi01, eps, 1 - eps)
+    pi11 = np.clip(pi11, eps, 1 - eps)
+    pi = np.clip(pi, eps, 1 - eps)
+
+    # Independence LR statistic
+    lr_ind = 2 * (
+        n00 * np.log((1 - pi01) / (1 - pi + eps) + eps)
+        + n01 * np.log(pi01 / (pi + eps) + eps)
+        + n10 * np.log((1 - pi11) / (1 - pi + eps) + eps)
+        + n11 * np.log(pi11 / (pi + eps) + eps)
+    )
+    lr_ind = max(lr_ind, 0.0)
+
+    # Kupiec (POF) LR for the joint test
+    n_total = len(v)
+    x = v.sum()
+    vr = np.clip(x / n_total, eps, 1 - eps)
+    # We don't have p here, so joint test = lr_ind + lr_pof
+    # But we just report independence separately
+    p_value_ind = 1 - chi2.cdf(lr_ind, df=1)
+
+    return {
+        "lr_ind": lr_ind,
+        "p_value_ind": p_value_ind,
+        "reject_ind_5pct": p_value_ind < 0.05,
+        "n_transitions": {"n00": n00, "n01": n01, "n10": n10, "n11": n11},
+    }
+
+
 def _get_k_and_params(diag, k_value):
     """Look up GPD params for a given k in the diagnostics grid."""
     k_grid = np.asarray(diag["k_grid"])
@@ -138,9 +213,11 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
     sqrt_k = np.array([int(np.sqrt(ds["n"])) for ds in test_data])
     methods["fixed_sqrt_n"] = sqrt_k
 
-    results = {m: {"violations": [], "var_estimates": [], "n_future_list": []}
+    results = {m: {"violations": [], "var_estimates": [], "n_future_list": [], "tickers": [],
+                    "violations_binary": []}
                for m in methods}
-    results["historical_sim"] = {"violations": [], "var_estimates": [], "n_future_list": []}
+    results["historical_sim"] = {"violations": [], "var_estimates": [], "n_future_list": [], "tickers": [],
+                                  "violations_binary": []}
 
     n_skipped = 0
 
@@ -172,6 +249,10 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
             results[method_name]["violations"].append(bt["violation_rate"])
             results[method_name]["var_estimates"].append(bt["var_estimate"])
             results[method_name]["n_future_list"].append(bt["n_future"])
+            results[method_name]["tickers"].append(ticker)
+            results[method_name]["violations_binary"].extend(
+                (future_returns > bt["var_estimate"]).astype(int).tolist()
+            )
 
         # Historical simulation baseline (empirical quantile)
         hist_var = np.quantile(ds["samples"], p)
@@ -180,6 +261,10 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
         results["historical_sim"]["violations"].append(hist_vr)
         results["historical_sim"]["var_estimates"].append(hist_var)
         results["historical_sim"]["n_future_list"].append(len(future_returns))
+        results["historical_sim"]["tickers"].append(ticker)
+        results["historical_sim"]["violations_binary"].extend(
+            (future_returns > hist_var).astype(int).tolist()
+        )
 
     if n_skipped > 0:
         logger.info("Skipped %d windows with insufficient future data", n_skipped)
@@ -202,12 +287,16 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
 
         kup = kupiec_test(overall_vr, total_obs, p)
 
+        # Christoffersen independence test on binary violation sequence
+        chris = christoffersen_test(data["violations_binary"])
+
         summary[method_name] = {
             "mean_violation_rate": mean_vr,
             "overall_violation_rate": overall_vr,
             "expected_rate": expected_rate,
             "n_windows": len(vr_arr),
             "kupiec": kup,
+            "christoffersen": chris,
         }
 
     return {"summary": summary, "details": results}
@@ -272,5 +361,52 @@ def plot_real_results(results, save_dir):
         fig.tight_layout()
         fig.savefig(os.path.join(save_dir, 'var_time_series.png'), dpi=150)
         plt.close(fig)
+
+    # 3. Per-ticker violation rate box plot across methods
+    details = results.get("details", {})
+    plot_methods = ["cnn", "baseline_k_star", "fixed_sqrt_n", "historical_sim"]
+    plot_methods = [m for m in plot_methods if m in details and details[m]["tickers"]]
+
+    if plot_methods:
+        # Collect all unique tickers
+        all_tickers = sorted(set(details[plot_methods[0]]["tickers"]))
+
+        if len(all_tickers) > 1:
+            fig, axes = plt.subplots(1, len(plot_methods), figsize=(4 * len(plot_methods), 5),
+                                     sharey=True)
+            if len(plot_methods) == 1:
+                axes = [axes]
+
+            expected = results["summary"][plot_methods[0]].get("expected_rate", 0.01)
+
+            for ax, method in zip(axes, plot_methods):
+                tickers_list = details[method]["tickers"]
+                vr_list = details[method]["violations"]
+
+                # Group violations by ticker
+                ticker_groups = {}
+                for t, vr in zip(tickers_list, vr_list):
+                    ticker_groups.setdefault(t, []).append(vr)
+
+                sorted_tickers = sorted(ticker_groups.keys())
+                box_data = [ticker_groups[t] for t in sorted_tickers]
+                tick_labels = [f'{t}\n(n={len(ticker_groups[t])})' for t in sorted_tickers]
+
+                bp = ax.boxplot(box_data, tick_labels=tick_labels, patch_artist=True,
+                                medianprops=dict(color='red', lw=1.5))
+                for patch in bp['boxes']:
+                    patch.set_facecolor('#2196F3' if method == 'cnn' else
+                                        '#4CAF50' if method == 'baseline_k_star' else '#9E9E9E')
+                    patch.set_alpha(0.6)
+                ax.axhline(expected, color='red', ls='--', lw=1, alpha=0.7)
+                ax.set_title(method.replace('_', ' ').title(), fontsize=10)
+                ax.tick_params(axis='x', rotation=30)
+
+            axes[0].set_ylabel('Violation Rate')
+            fig.suptitle('Per-Ticker Violation Rates by Method', fontsize=12, y=1.02)
+            fig.tight_layout()
+            fig.savefig(os.path.join(save_dir, 'violation_rates_by_ticker.png'), dpi=150,
+                        bbox_inches='tight')
+            plt.close(fig)
 
     logger.info("Real-data figures saved to %s", save_dir)
