@@ -38,6 +38,23 @@ evaluate:
   quantile_p: 0.99
   test_fraction: 0.2
 
+diff_pot:
+  temperature_start: 5.0
+  temperature_end: 20.0
+  temperature_anneal: false
+  temperature_u: 50.0
+  quantiles: [0.95, 0.975, 0.99]
+  quantile_weights: [0.2, 0.3, 0.5]
+  pinball_weight: 0.7
+  es_weight: 0.3
+  k_aux_weight: 1.0
+  lr: 0.0005
+  batch_size: 32
+  max_epochs: 300
+  patience: 30
+  warm_start_from: null
+  xi_clamp: [-0.5, 0.95]
+
 realdata:
   tickers: ["^GSPC", "^IXIC", "^FTSE", "^N225", "^GDAXI"]
   start: "1960-01-01"

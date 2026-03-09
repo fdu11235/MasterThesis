@@ -24,6 +24,25 @@ For each test sample, the CNN predicts k, the GPD is fitted at that k to obtain 
 
 Performance improves with larger samples as expected. Student-t is the hardest family (~25% RMSE) because its tails are lighter than what GPD naturally fits, causing systematic overestimation. Pareto and mixtures are easiest (~5-11%) since their tails match GPD theory.
 
+**Expected Shortfall (ES) relative RMSE (p=0.99):**
+
+ES is computed from the GPD closed-form formula ES(p) = (VaR(p) + beta - xi * u) / (1 - xi) and compared against Monte Carlo ground truth (10M samples). ES errors are larger than VaR errors because ES depends on the entire tail shape beyond the quantile, amplifying estimation errors in xi and beta.
+
+| Sample size | VaR Rel. RMSE | ES Rel. RMSE |
+|-------------|---------------|--------------|
+| n=1000 | 18.2% | 117.1% |
+| n=2000 | 16.2% | 116.8% |
+| n=5000 | 14.5% | 70.0% |
+
+The high overall ES RMSE is driven almost entirely by the two-Pareto distribution (123-191% ES RMSE), whose regime change makes the tail especially hard to capture. The other families perform well:
+
+| Distribution (n=5000) | VaR Rel. RMSE | ES Rel. RMSE |
+|------------------------|---------------|--------------|
+| Student-t | 25.2% | 7.4% |
+| Lognormal-Pareto mix | 4.5% | 10.8% |
+| Pareto | 5.6% | 16.1% |
+| Two-Pareto | 8.6% | **122.8%** |
+
 **Diagnostic curves** — xi(k), Anderson-Darling GOF(k), and composite Score(k) for example datasets (n=1000), with baseline k* marked:
 
 ![Diagnostic curves](docs/figures/diagnostic_curves.png)
@@ -50,6 +69,17 @@ The pipeline downloads daily returns for 5 global equity indices (S&P 500, NASDA
 | Historical simulation | 1.55% |
 
 All methods produce reasonable violation rates (1.5-1.6%). The CNN closely tracks the baseline k*, confirming it learned the pseudo-labels. Kupiec tests reject at 5% for all methods (typical for real data with volatility clustering). Christoffersen independence tests also reject, confirming violations cluster during crisis periods.
+
+**Expected Shortfall backtesting (McNeil & Frey, 2000):**
+
+| Method | Mean ES | McNeil-Frey t-stat | p-value | Reject 5% |
+|--------|---------|-------------------|---------|-----------|
+| CNN | 0.0543 | 12.06 | <0.0001 | Yes |
+| Baseline k* | 0.0543 | 12.16 | <0.0001 | Yes |
+| Fixed sqrt(n) | 0.0538 | 12.82 | <0.0001 | Yes |
+| Historical simulation | 0.0535 | 11.59 | <0.0001 | Yes |
+
+The McNeil-Frey test examines whether, conditional on a VaR breach, the actual loss exceeds the ES estimate. All methods reject strongly (t > 11), meaning that when VaR is breached, losses systematically exceed what ES predicts. This is consistent with the Kupiec and Christoffersen rejections and points to a structural limitation: the unconditional rolling-window POT approach does not account for **volatility clustering** in financial returns. During stress periods, not only do VaR breaches occur more frequently (Kupiec rejection), they cluster in time (Christoffersen rejection), and the magnitude of exceedances over ES is systematically positive (McNeil-Frey rejection). A conditional model (e.g., GARCH-filtered residuals followed by POT) would likely improve these results by adapting to time-varying volatility.
 
 ![Violation rates](docs/figures/violation_rates.png)
 
@@ -99,9 +129,9 @@ pytest tests/ -v
 - `src/features.py` — Feature matrix construction (4 channels) for CNN
 - `src/model.py` — 1D CNN architecture (classification + regression)
 - `src/train.py` — Training loop with early stopping
-- `src/evaluate.py` — Agreement metrics, quantile evaluation, diagnostic plots
+- `src/evaluate.py` — Agreement metrics, VaR/ES quantile evaluation, diagnostic plots
 - `src/realdata.py` — Real data loading (yfinance), rolling windows
-- `src/evaluate_real.py` — VaR backtesting, Kupiec test, Christoffersen independence test
+- `src/evaluate_real.py` — VaR/ES backtesting, Kupiec test, Christoffersen independence test, McNeil-Frey ES test
 - `run_pipeline.py` — Synthetic pipeline entry point (Steps 1-7)
 - `run_real_pipeline.py` — Real data pipeline entry point (Step 8)
 - `outputs/` — Generated at runtime (git-ignored)

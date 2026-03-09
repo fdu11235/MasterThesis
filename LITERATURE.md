@@ -106,7 +106,86 @@
 
 ---
 
-## 5. Relevance to Thesis
+## 5. Differentiable Optimization & End-to-End Learning
+
+### Cuturi, Teboul & Vert (2019) — Differentiable Ranking and Sorting using Optimal Transport
+- **Authors:** Marco Cuturi, Olivier Teboul, Jean-Philippe Vert
+- **Venue:** NeurIPS 2019
+- **Link:** [NeurIPS](https://proceedings.neurips.cc/paper/2019/hash/d8c24ca8f23f562c0aa3f30ca0afec78-Abstract.html)
+- **Summary:** Proposes differentiable operators for ranking and sorting based on optimal transport. Casts sorting as a linear program over permutation matrices, then relaxes it via entropic regularization (Sinkhorn). Enables backpropagation through sorting operations — a key building block for end-to-end differentiable pipelines that involve order statistics (e.g., threshold selection in POT).
+
+### Blondel et al. (2020) — Fast Differentiable Sorting and Ranking
+- **Authors:** Mathieu Blondel, Olivier Teboul, Quentin Berthet, Josip Djolonga
+- **Venue:** ICML 2020
+- **Link:** [PMLR](https://proceedings.mlr.press/v119/blondel20a.html) | [GitHub (torchsort)](https://github.com/teddykoker/torchsort)
+- **Summary:** Introduces faster differentiable sorting/ranking operators based on isotonic regression, avoiding the cubic complexity of Sinkhorn-based approaches. Implemented in the `torchsort` library for PyTorch. Directly relevant to Pathway M: enables differentiable soft-thresholding over sorted return data.
+
+### Amos & Kolter (2017) — OptNet: Differentiable Optimization as a Layer in Neural Networks
+- **Authors:** Brandon Amos, J. Zico Kolter
+- **Venue:** ICML 2017
+- **Link:** [PMLR](https://proceedings.mlr.press/v70/amos17a.html) | [GitHub](https://github.com/locuslab/optnet)
+- **Summary:** Shows how to embed convex optimization problems as differentiable layers in neural networks by differentiating through the KKT conditions. Foundational work for end-to-end pipelines that incorporate constrained optimization (e.g., GPD parameter estimation subject to sigma > 0).
+
+---
+
+## 6. Transformers & Temporal Models for EVT
+
+### Vaswani et al. (2017) — Attention Is All You Need
+- **Authors:** Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin
+- **Venue:** NeurIPS 2017
+- **Link:** [arXiv](https://arxiv.org/abs/1706.03762)
+- **Summary:** Introduces the Transformer architecture based on multi-head self-attention. Foundational architecture for Pathway D: a causal Transformer encoder processes return sequences to produce time-varying GPD parameters.
+
+### EVEREST (2025) — Transformer + EVT Logit-Exceedance Regularizer for Anomaly Detection
+- **Authors:** (Multiple authors)
+- **Venue:** arXiv preprint, 2025
+- **Summary:** Combines a Transformer encoder with an EVT-informed regularizer on logit exceedances for streaming anomaly detection. The EVT component constrains the Transformer's output distribution to have theoretically valid tail behavior. Targets anomaly detection rather than financial VaR, but demonstrates the feasibility of Transformer + EVT integration.
+
+### Chavez-Demoulin & Davison (2005) — Generalized Additive Modelling of Sample Extremes
+- **Authors:** Valérie Chavez-Demoulin, Anthony C. Davison
+- **Venue:** Journal of the Royal Statistical Society: Series C, 54(1), 207-222
+- **Link:** [Wiley (JRSS-C)](https://rss.onlinelibrary.wiley.com/doi/abs/10.1111/j.1467-9876.2005.00479.x)
+- **Summary:** Extends POT modelling to non-stationary settings by allowing GPD parameters to vary smoothly over time via generalized additive models (GAMs). An early precursor to Pathway D's idea of time-varying GPD parameters, though using splines rather than neural networks.
+
+---
+
+## 7. Tail-Aware Generative Models
+
+### Cont et al. (2024) — Tail-GAN: Learning to Simulate Tail Risk Scenarios
+- **Authors:** Rama Cont et al.
+- **Venue:** Management Science, 2024
+- **Link:** [INFORMS](https://pubsonline.informs.org/doi/abs/10.1287/mnsc.2023.4882)
+- **Summary:** Proposes a GAN architecture that preserves tail risk measures (VaR, ES) when generating synthetic financial scenarios. The discriminator is augmented with tail-specific penalties to prevent mode collapse in the extremes. Demonstrates that standard GANs systematically underestimate tail risk, while Tail-GAN produces scenarios faithful to empirical tail behavior.
+
+### Hu & Castro-Camilo (2025) — GPDFlow: Normalizing Flow for Multivariate GPD
+- **Authors:** Ying Hu, Daniela Castro-Camilo
+- **Venue:** arXiv preprint, 2025
+- **Summary:** Applies normalizing flows to model multivariate generalized Pareto distributions for joint tail risk of US banks. The flow architecture captures complex tail dependence structures that parametric multivariate GPD models cannot. Relevant to potential extensions of the thesis to multivariate tail risk.
+
+### Hickling & Prangle (2025) — Tail Transform Flows (TTF)
+- **Authors:** Thomas Hickling, Dennis Prangle
+- **Venue:** ICML 2025
+- **Summary:** Introduces a tail transform layer for normalizing flows that explicitly controls tail behavior. The last transformation in the flow is constrained to produce outputs with specified tail decay (e.g., power-law tails matching GPD). Bridges the gap between flexible flow-based density estimation and EVT's theoretical guarantees on tail behavior.
+
+---
+
+## 8. VaR Backtesting
+
+### Kupiec (1995) — Techniques for Verifying the Accuracy of Risk Measurement Models
+- **Authors:** Paul H. Kupiec
+- **Venue:** Journal of Derivatives, 3(2), 73-84
+- **Link:** [Journal of Derivatives](https://jod.pm-research.com/content/3/2/73)
+- **Summary:** Introduces the proportion-of-failures (POF) test for VaR model validation. Tests whether the observed violation rate is consistent with the target confidence level using a likelihood ratio statistic (chi-squared with 1 df). The standard first-pass backtest for VaR models, used in the thesis's real-data evaluation (Step 8).
+
+### Christoffersen (1998) — Evaluating Interval Forecasts
+- **Authors:** Peter F. Christoffersen
+- **Venue:** International Economic Review, 39(4), 841-862
+- **Link:** [JSTOR](https://www.jstor.org/stable/2527341)
+- **Summary:** Develops a joint test for conditional coverage of interval forecasts, decomposed into unconditional coverage (Kupiec) and independence components. The independence test detects violation clustering — critical for financial VaR where volatility persistence causes consecutive violations. Used in the thesis's Step 8 evaluation.
+
+---
+
+## 9. Relevance to Thesis
 
 | Category | Relevance |
 |----------|-----------|
@@ -114,3 +193,7 @@
 | **Classical automated methods** | These papers (Bader et al., Northrop et al., Murphy et al., Silva Lomba & Fraga Alves, Langousis et al.) represent the statistical state-of-the-art in automated threshold selection — the benchmarks against which an ML-based approach should be compared. Murphy et al. (2024) is particularly relevant for uncertainty propagation. |
 | **ML/NN approaches** | Directly relevant prior work. Rai et al. and Allouche et al. show that neural networks can estimate EVT parameters and extreme quantiles effectively. Pasche & Engelke (EQRN) and Gnecco et al. (ERF) demonstrate how ML models can be combined with GPD extrapolation in a principled way. Iroko et al. (2025) is the closest to the thesis topic — using ML specifically for POT threshold selection. |
 | **EVT + anomaly detection** | SPOT/DSPOT (Siffer et al.) shows that POT can be made fully automatic in streaming settings, providing practical motivation. Spilak & Hardle demonstrates the combination of EVT with neural networks in finance, a key application domain for the thesis. |
+| **Differentiable optimization** | Cuturi et al. (2019), Blondel et al. (2020), and Amos & Kolter (2017) provide the technical foundations for Pathway M (differentiable POT pipeline): differentiable sorting/ranking enables soft-thresholding, and differentiable optimization layers enable end-to-end GPD fitting. |
+| **Transformers & temporal EVT** | Vaswani et al. (2017) provides the base architecture for Pathway D. EVEREST (2025) demonstrates Transformer + EVT integration for anomaly detection. Chavez-Demoulin & Davison (2005) is an early precursor using GAMs for time-varying GPD parameters. |
+| **Tail-aware generative models** | Tail-GAN (Cont et al., 2024), GPDFlow (Hu & Castro-Camilo, 2025), and TTF (Hickling & Prangle, 2025) represent the frontier of combining deep generative models with EVT tail constraints. Relevant to potential Pathway E extensions. |
+| **VaR backtesting** | Kupiec (1995) and Christoffersen (1998) provide the statistical tests used in Step 8 for evaluating VaR model accuracy and violation independence. |

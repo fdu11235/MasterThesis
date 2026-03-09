@@ -11,9 +11,9 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from scipy.stats import chi2
+from scipy.stats import chi2, ttest_1samp
 
-from src.evaluate import pot_quantile
+from src.evaluate import pot_quantile, pot_es
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ def var_backtest(sorted_desc, k, xi, beta, n, p, future_returns):
     dict with var_estimate, n_violations, violation_rate, n_future.
     """
     var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
+    es_est = pot_es(sorted_desc, k, xi, beta, n, p)
     violations = future_returns > var_est
     n_violations = int(violations.sum())
     n_future = len(future_returns)
@@ -48,6 +49,7 @@ def var_backtest(sorted_desc, k, xi, beta, n, p, future_returns):
 
     return {
         "var_estimate": var_est,
+        "es_estimate": es_est,
         "n_violations": n_violations,
         "violation_rate": violation_rate,
         "n_future": n_future,
@@ -168,6 +170,47 @@ def christoffersen_test(violations_binary):
     }
 
 
+def mcneil_frey_test(future_returns, var_est, es_est):
+    """McNeil & Frey (2000) exceedance residual test.
+
+    When VaR is violated, test if mean excess over ES is zero.
+
+    Parameters
+    ----------
+    future_returns : ndarray
+        Absolute returns in the backtest horizon.
+    var_est : float or ndarray
+        VaR estimate(s).
+    es_est : float or ndarray
+        ES estimate(s).
+
+    Returns
+    -------
+    dict with t_stat, p_value, reject_5pct, n_violations, mean_residual.
+    """
+    future_returns = np.asarray(future_returns)
+    var_est = np.asarray(var_est)
+    es_est = np.asarray(es_est)
+
+    mask = future_returns > var_est
+    n_violations = int(mask.sum())
+    if n_violations < 2:
+        return {
+            "t_stat": float('nan'), "p_value": float('nan'),
+            "reject_5pct": False, "n_violations": n_violations,
+        }
+    residuals = (future_returns[mask] - es_est[mask] if es_est.ndim > 0
+                 else future_returns[mask] - es_est) / (
+                 es_est[mask] if es_est.ndim > 0 else es_est)
+    t_stat, p_value = ttest_1samp(residuals, 0)
+    return {
+        "t_stat": float(t_stat), "p_value": float(p_value),
+        "reject_5pct": p_value < 0.05,
+        "n_violations": n_violations,
+        "mean_residual": float(residuals.mean()),
+    }
+
+
 def _get_k_and_params(diag, k_value):
     """Look up GPD params for a given k in the diagnostics grid."""
     k_grid = np.asarray(diag["k_grid"])
@@ -213,11 +256,13 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
     sqrt_k = np.array([int(np.sqrt(ds["n"])) for ds in test_data])
     methods["fixed_sqrt_n"] = sqrt_k
 
-    results = {m: {"violations": [], "var_estimates": [], "n_future_list": [], "tickers": [],
-                    "violations_binary": []}
+    results = {m: {"violations": [], "var_estimates": [], "es_estimates": [],
+                    "n_future_list": [], "tickers": [], "violations_binary": [],
+                    "future_returns_all": [], "var_all": [], "es_all": []}
                for m in methods}
-    results["historical_sim"] = {"violations": [], "var_estimates": [], "n_future_list": [], "tickers": [],
-                                  "violations_binary": []}
+    results["historical_sim"] = {"violations": [], "var_estimates": [], "es_estimates": [],
+                                  "n_future_list": [], "tickers": [], "violations_binary": [],
+                                  "future_returns_all": [], "var_all": [], "es_all": []}
 
     n_skipped = 0
 
@@ -248,23 +293,33 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
             bt = var_backtest(sorted_desc, k, xi, beta, n, p, future_returns)
             results[method_name]["violations"].append(bt["violation_rate"])
             results[method_name]["var_estimates"].append(bt["var_estimate"])
+            results[method_name]["es_estimates"].append(bt["es_estimate"])
             results[method_name]["n_future_list"].append(bt["n_future"])
             results[method_name]["tickers"].append(ticker)
             results[method_name]["violations_binary"].extend(
                 (future_returns > bt["var_estimate"]).astype(int).tolist()
             )
+            results[method_name]["future_returns_all"].extend(future_returns.tolist())
+            results[method_name]["var_all"].extend([bt["var_estimate"]] * len(future_returns))
+            results[method_name]["es_all"].extend([bt["es_estimate"]] * len(future_returns))
 
         # Historical simulation baseline (empirical quantile)
         hist_var = np.quantile(ds["samples"], p)
+        samples_above = ds["samples"][ds["samples"] > hist_var]
+        hist_es = float(samples_above.mean()) if len(samples_above) > 0 else hist_var
         hist_violations = future_returns > hist_var
         hist_vr = hist_violations.sum() / len(future_returns)
         results["historical_sim"]["violations"].append(hist_vr)
         results["historical_sim"]["var_estimates"].append(hist_var)
+        results["historical_sim"]["es_estimates"].append(hist_es)
         results["historical_sim"]["n_future_list"].append(len(future_returns))
         results["historical_sim"]["tickers"].append(ticker)
         results["historical_sim"]["violations_binary"].extend(
             (future_returns > hist_var).astype(int).tolist()
         )
+        results["historical_sim"]["future_returns_all"].extend(future_returns.tolist())
+        results["historical_sim"]["var_all"].extend([hist_var] * len(future_returns))
+        results["historical_sim"]["es_all"].extend([hist_es] * len(future_returns))
 
     if n_skipped > 0:
         logger.info("Skipped %d windows with insufficient future data", n_skipped)
@@ -290,6 +345,20 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
         # Christoffersen independence test on binary violation sequence
         chris = christoffersen_test(data["violations_binary"])
 
+        # ES: mean estimate and McNeil-Frey test
+        es_arr = np.array(data["es_estimates"])
+        mean_es = float(es_arr.mean()) if len(es_arr) > 0 else float('nan')
+
+        # Pooled McNeil-Frey test across all windows
+        mf = mcneil_frey_test(
+            np.array(data["future_returns_all"]),
+            np.array(data["var_all"]),
+            np.array(data["es_all"]),
+        ) if data["future_returns_all"] else {
+            "t_stat": float('nan'), "p_value": float('nan'),
+            "reject_5pct": False, "n_violations": 0,
+        }
+
         summary[method_name] = {
             "mean_violation_rate": mean_vr,
             "overall_violation_rate": overall_vr,
@@ -297,6 +366,8 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
             "n_windows": len(vr_arr),
             "kupiec": kup,
             "christoffersen": chris,
+            "mean_es_estimate": mean_es,
+            "mcneil_frey": mf,
         }
 
     return {"summary": summary, "details": results}

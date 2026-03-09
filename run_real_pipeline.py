@@ -204,9 +204,16 @@ def main():
                      f"p={chris.get('p_value_ind', 'N/A'):.4f}, "
                      f"reject={chris.get('reject_ind_5pct', 'N/A')}"
                      if chris else "N/A")
+        mf = stats.get("mcneil_frey", {})
+        mf_str = (f"t={mf.get('t_stat', float('nan')):.2f}, "
+                  f"p={mf.get('p_value', float('nan')):.4f}, "
+                  f"reject={mf.get('reject_5pct', 'N/A')}"
+                  if mf else "N/A")
         logger.info("  %-20s: VR=%.4f (expected=%.4f), n=%d", method, vr, expected, n_win)
         logger.info("    Kupiec:          %s", kup_str)
         logger.info("    Christoffersen:  %s", chris_str)
+        logger.info("    Mean ES:         %.4f", stats.get("mean_es_estimate", float('nan')))
+        logger.info("    McNeil-Frey:     %s", mf_str)
     logger.info("=" * 60)
 
     # Plot

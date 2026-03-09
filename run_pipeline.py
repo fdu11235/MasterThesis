@@ -190,9 +190,12 @@ def main():
             logger.info("    Agreement rates: %s", results['agreement'])
             logger.info("    Quantile RMSE:   %.4f", results['quantile_rmse'])
             logger.info("    Relative RMSE:   %.2f%%", results['relative_rmse'] * 100)
+            logger.info("    ES RMSE:         %.4f", results['es_rmse'])
+            logger.info("    ES Rel. RMSE:    %.2f%%", results['es_relative_rmse'] * 100)
             for dist_type, metrics in results.get('rmse_by_dist', {}).items():
-                logger.info("    %s: RMSE=%.4f, RelRMSE=%.2f%%, n=%d",
-                             dist_type, metrics['rmse'], metrics['relative_rmse'] * 100, metrics['count'])
+                logger.info("    %s: RMSE=%.4f, RelRMSE=%.2f%%, ES_RMSE=%.4f, ES_RelRMSE=%.2f%%, n=%d",
+                             dist_type, metrics['rmse'], metrics['relative_rmse'] * 100,
+                             metrics['es_rmse'], metrics['es_relative_rmse'] * 100, metrics['count'])
 
             fig_dir = f"outputs/figures/n{n_size}"
             plot_results(results, grp_diags, fig_dir)
@@ -277,9 +280,12 @@ def main():
             logger.info("  → Agreement rates: %s", results['agreement'])
             logger.info("  → Quantile RMSE:   %.4f", results['quantile_rmse'])
             logger.info("  → Relative RMSE:   %.2f%%", results['relative_rmse'] * 100)
+            logger.info("  → ES RMSE:         %.4f", results['es_rmse'])
+            logger.info("  → ES Rel. RMSE:    %.2f%%", results['es_relative_rmse'] * 100)
             for dist_type, metrics in results.get('rmse_by_dist', {}).items():
-                logger.info("    %s: RMSE=%.4f, RelRMSE=%.2f%%, n=%d",
-                             dist_type, metrics['rmse'], metrics['relative_rmse'] * 100, metrics['count'])
+                logger.info("    %s: RMSE=%.4f, RelRMSE=%.2f%%, ES_RMSE=%.4f, ES_RelRMSE=%.2f%%, n=%d",
+                             dist_type, metrics['rmse'], metrics['relative_rmse'] * 100,
+                             metrics['es_rmse'], metrics['es_relative_rmse'] * 100, metrics['count'])
 
             fig_dir = f"outputs/figures/n{n_size}"
             plot_results(results, test_diags, fig_dir)

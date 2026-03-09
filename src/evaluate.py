@@ -7,11 +7,15 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy import stats
 
-from src.synthetic import _generate_lognormal_pareto_mix, _generate_two_pareto
+from src.synthetic import (
+    _generate_student_t, _generate_pareto,
+    _generate_lognormal_pareto_mix, _generate_two_pareto,
+)
 
 logger = logging.getLogger(__name__)
 
 _mc_quantile_cache = {}
+_mc_es_cache = {}
 
 
 def _params_key(dist_type, dist_params, p):
@@ -64,6 +68,20 @@ def pot_quantile(sorted_desc, k, xi, beta, n, p):
     return u + (beta / xi) * ((n / k * (1 - p)) ** (-xi) - 1)
 
 
+def pot_es(sorted_desc, k, xi, beta, n, p):
+    """GPD closed-form Expected Shortfall.
+
+    ES(p) = (VaR(p) + beta - xi * u) / (1 - xi)   if xi != 0
+    ES(p) = VaR(p) + beta                           if xi ~ 0
+    """
+    var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
+    u = sorted_desc[k]
+    if abs(xi) < 1e-8:
+        return var_est + beta
+    one_minus_xi = max(1 - xi, 0.05)  # stability clamp (mirrors diff_pot.py:130)
+    return (var_est + beta - xi * u) / one_minus_xi
+
+
 def true_quantile(dist_type, dist_params, p):
     """Analytical quantile from known distribution parameters.
 
@@ -87,6 +105,36 @@ def true_quantile(dist_type, dist_params, p):
     raise ValueError(f"Unknown dist_type: {dist_type}")
 
 
+def _mc_es(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
+    """Monte Carlo Expected Shortfall: E[X | X > VaR(p)]."""
+    rng = np.random.RandomState(seed)
+    generators = {
+        'student_t': lambda: np.abs(stats.t.rvs(df=dist_params['df'], size=n_mc, random_state=rng)),
+        'pareto': lambda: stats.pareto.rvs(b=dist_params['alpha'], size=n_mc, random_state=rng),
+        'lognormal_pareto_mix': lambda: _generate_lognormal_pareto_mix(rng, n_mc, **dist_params),
+        'two_pareto': lambda: _generate_two_pareto(rng, n_mc, **dist_params),
+    }
+    if dist_type not in generators:
+        raise ValueError(f"No MC ES for {dist_type}")
+    samples = generators[dist_type]()
+    q = np.quantile(samples, p)
+    tail = samples[samples > q]
+    return float(tail.mean()) if len(tail) > 0 else float(q)
+
+
+def true_es(dist_type, dist_params, p):
+    """True Expected Shortfall via Monte Carlo: E[X | X > VaR(p)].
+
+    Uses 10M samples, cached by (dist_type, params, p).
+    Matches the MC approach in run_diff_pipeline.py for consistency.
+    """
+    key = _params_key(dist_type, dist_params, p)
+    if key not in _mc_es_cache:
+        logger.info("Computing MC ES for %s (p=%s) ...", dist_type, p)
+        _mc_es_cache[key] = _mc_es(dist_type, dist_params, p)
+    return _mc_es_cache[key]
+
+
 def evaluate_all(test_data, k_pred, k_true, config):
     """Compute all evaluation metrics.
 
@@ -105,10 +153,12 @@ def evaluate_all(test_data, k_pred, k_true, config):
     for r in config.get('agreement_radii', [5, 10]):
         results['agreement'][r] = agreement_rate(k_pred, k_true, r)
 
-    # Quantile RMSE
+    # Quantile and ES RMSE
     p = config.get('quantile_p', 0.99)
     q_est = []
     q_true = []
+    es_est_list = []
+    es_true_list = []
     dist_types = []
     dist_params = []
     for i, (ds, diag) in enumerate(test_data):
@@ -122,17 +172,27 @@ def evaluate_all(test_data, k_pred, k_true, config):
         n = ds['n']
         q_est.append(pot_quantile(sorted_desc, k, xi, beta, n, p))
         q_true.append(true_quantile(ds['dist_type'], ds['params'], p))
+        es_est_list.append(pot_es(sorted_desc, k, xi, beta, n, p))
+        es_true_list.append(true_es(ds['dist_type'], ds['params'], p))
         dist_types.append(ds['dist_type'])
         dist_params.append(ds['params'])
 
     if q_est:
         q_est_arr = np.array(q_est)
         q_true_arr = np.array(q_true)
+        es_est_arr = np.array(es_est_list)
+        es_true_arr = np.array(es_true_list)
+
         results['quantile_rmse'] = np.sqrt(np.mean((q_est_arr - q_true_arr) ** 2))
 
         # Relative RMSE (normalized by true quantile)
         rel_errors = (q_est_arr - q_true_arr) / q_true_arr
         results['relative_rmse'] = np.sqrt(np.mean(rel_errors ** 2))
+
+        # ES RMSE
+        results['es_rmse'] = np.sqrt(np.mean((es_est_arr - es_true_arr) ** 2))
+        es_rel_errors = (es_est_arr - es_true_arr) / es_true_arr
+        results['es_relative_rmse'] = np.sqrt(np.mean(es_rel_errors ** 2))
 
         # Per-distribution RMSE breakdown
         results['rmse_by_dist'] = {}
@@ -140,21 +200,29 @@ def evaluate_all(test_data, k_pred, k_true, config):
             mask = np.array([d == dist_type for d in dist_types])
             q_e = q_est_arr[mask]
             q_t = q_true_arr[mask]
+            es_e = es_est_arr[mask]
+            es_t = es_true_arr[mask]
             results['rmse_by_dist'][dist_type] = {
                 'rmse': np.sqrt(np.mean((q_e - q_t) ** 2)),
                 'relative_rmse': np.sqrt(np.mean(((q_e - q_t) / q_t) ** 2)),
+                'es_rmse': np.sqrt(np.mean((es_e - es_t) ** 2)),
+                'es_relative_rmse': np.sqrt(np.mean(((es_e - es_t) / es_t) ** 2)),
                 'count': int(mask.sum()),
             }
 
         # Store raw data for plotting
         results['_q_est'] = q_est
         results['_q_true'] = q_true
+        results['_es_est'] = es_est_list
+        results['_es_true'] = es_true_list
         results['_dist_types'] = dist_types
         results['_dist_params'] = dist_params
         results['_quantile_p'] = p
     else:
         results['quantile_rmse'] = float('nan')
         results['relative_rmse'] = float('nan')
+        results['es_rmse'] = float('nan')
+        results['es_relative_rmse'] = float('nan')
         results['rmse_by_dist'] = {}
 
     logger.debug("Quantile RMSE: %.4f, Relative RMSE: %.2f%% (from %d / %d valid samples)",
