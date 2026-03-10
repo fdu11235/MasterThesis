@@ -105,6 +105,31 @@ The McNeil-Frey test examines whether, conditional on a VaR breach, the actual l
 
 ---
 
+### Extensions Beyond the Original Plan
+
+The PDF roadmap (Steps 1-8) prescribed a minimal pipeline: three diagnostics (xi stability, KS goodness-of-fit, 1/sqrt(k) penalty), a 1D CNN, and basic agreement/quantile evaluation. It noted that "a second iteration can add: mean excess diagnostics, alternative GOF (Anderson-Darling), and time-series effects (declustering, tail index, etc.)." All of those second-iteration items are now implemented, plus several further extensions:
+
+**Second-iteration items (all completed):**
+- Mean excess linearity score as a diagnostic channel and baseline scoring component
+- Anderson-Darling GOF (replaces KS throughout)
+- Runs declustering for real-data rolling windows
+- Hill tail index estimator as a feature channel
+
+**Additional extensions:**
+- **7 feature channels** for the CNN (xi, beta, AD GOF, mean excess score, Hill estimator, QQ-plot residual RMSE, raw mean excess) vs the 3 suggested in the PDF
+- **Expected Shortfall** — closed-form GPD ES, Monte Carlo ground truth (10M samples), and McNeil-Frey backtesting on real data
+- **Statistical backtesting suite** — Kupiec proportion-of-failures, Christoffersen conditional coverage, and McNeil-Frey ES tests
+- **Transfer learning** — pre-train on synthetic data, fine-tune on real-data pseudo-labels with discriminative learning rates (backbone at 0.1x)
+- **GARCH(1,1) filtering** — McNeil & Frey (2000) approach: fit GARCH to signed returns, apply POT to standardized residuals, scale VaR/ES back by forecasted volatility
+- **Differentiable POT pipeline (Pathway M)** — end-to-end differentiable threshold selection via sigmoid soft-masking, probability-weighted-moment GPD estimation, and direct VaR/ES optimization with pinball + Fissler-Ziegel joint loss (bypasses proxy-label misalignment)
+- **Regression mode** — unified model across all sample sizes with normalized k targets (replaces per-size classification)
+- **Bootstrap 95% confidence intervals** on relative RMSE and ES RMSE
+
+**Currently in progress:**
+- Pathway D (Temporal Transformer) — causal Transformer encoder that outputs time-varying GPD parameters, replacing the fixed rolling-window assumption
+
+---
+
 ## Setup
 
 ```bash
