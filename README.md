@@ -69,7 +69,7 @@ The high overall ES RMSE is driven almost entirely by the two-Pareto distributio
 
 ### Real Data Pipeline (Step 8)
 
-The pipeline downloads daily returns for 5 global equity indices (S&P 500, NASDAQ, FTSE 100, Nikkei 225, DAX), builds 1,216 rolling windows (size=1000, step=50), and evaluates with out-of-sample VaR backtesting.
+The pipeline downloads daily returns for 5 global equity indices (S&P 500, NASDAQ, FTSE 100, Nikkei 225, DAX), builds 1,216 rolling windows (size=1000, step=50), and evaluates with out-of-sample VaR backtesting. A rolling backtesting window of lookback size 1000 and backtesting + step size of 50 is tested. We estimate POT models both on raw returns and on GARCH(1,1)-standardized residuals, allowing a comparison between unconditional and volatility-filtered EVT frameworks. 
 
 **VaR violation rates** (expected = 1% at p=0.99):
 
@@ -91,7 +91,7 @@ All methods produce reasonable violation rates (1.5-1.6%). The CNN closely track
 | Fixed sqrt(n) | 0.0538 | 12.82 | <0.0001 | Yes |
 | Historical simulation | 0.0535 | 11.59 | <0.0001 | Yes |
 
-The McNeil-Frey test examines whether, conditional on a VaR breach, the actual loss exceeds the ES estimate. All methods reject strongly (t > 11), meaning that when VaR is breached, losses systematically exceed what ES predicts. This is consistent with the Kupiec and Christoffersen rejections and points to a structural limitation: the unconditional rolling-window POT approach does not account for **volatility clustering** in financial returns. During stress periods, not only do VaR breaches occur more frequently (Kupiec rejection), they cluster in time (Christoffersen rejection), and the magnitude of exceedances over ES is systematically positive (McNeil-Frey rejection). A conditional model (e.g., GARCH-filtered residuals followed by POT) would likely improve these results by adapting to time-varying volatility.
+The McNeil-Frey test examines whether, conditional on a VaR breach, the actual loss exceeds the ES estimate. All methods reject strongly (t > 11), meaning that when VaR is breached, losses systematically exceed what ES predicts. This is consistent with the Kupiec and Christoffersen rejections and points to a structural limitation.
 
 ![Violation rates](docs/figures/violation_rates.png)
 
