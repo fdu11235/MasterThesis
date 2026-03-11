@@ -69,7 +69,9 @@ The high overall ES RMSE is driven almost entirely by the two-Pareto distributio
 
 ### Real Data Pipeline (Step 8)
 
-The pipeline downloads daily returns for 5 global equity indices (S&P 500, NASDAQ, FTSE 100, Nikkei 225, DAX), builds 1,216 rolling windows (size=1000, step=50), and evaluates with out-of-sample VaR backtesting. A rolling backtesting window of lookback size 1000 and backtesting + step size of 50 is tested. We estimate POT models both on raw returns and on GARCH(1,1)-standardized residuals, allowing a comparison between unconditional and volatility-filtered EVT frameworks. 
+The pipeline downloads daily returns for five global equity indices (S&P 500, NASDAQ, FTSE 100, Nikkei 225, and DAX), constructs 1,216 rolling windows (window size = 1000 observations, step size = 50), and evaluates the models using out-of-sample VaR backtesting. For each window, the first 1000 observations are used for estimation, while the subsequent 50 observations are used for backtesting before the window is rolled forward.
+
+We estimate POT models both on raw returns and on GARCH(1,1)-standardized residuals, allowing us to evaluate EVT performance under both unconditional and volatility-filtered settings.
 
 **VaR violation rates** (expected = 1% at p=0.99):
 
