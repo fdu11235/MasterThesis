@@ -107,7 +107,7 @@ The McNeil-Frey test examines whether, conditional on a VaR breach, the actual l
 
 ### Extensions Beyond the Original Plan
 
-The PDF roadmap (Steps 1-8) prescribed a minimal pipeline: three diagnostics (xi stability, KS goodness-of-fit, 1/sqrt(k) penalty), a 1D CNN, and basic agreement/quantile evaluation. It noted that "a second iteration can add: mean excess diagnostics, alternative GOF (Anderson-Darling), and time-series effects (declustering, tail index, etc.)." All of those second-iteration items are now implemented, plus several further extensions:
+The PDF roadmap (Steps 1-8) prescribed a minimal pipeline: three diagnostics (xi stability, KS goodness-of-fit, 1/sqrt(k) penalty), a 1D CNN, and basic agreement/quantile evaluation. A second iteration can add: mean excess diagnostics, alternative GOF (Anderson-Darling), and time-series effects (declustering, tail index, etc.). All of those second-iteration items are being implemented and tested, plus several further extensions:
 
 **Second-iteration items (all completed):**
 - Mean excess linearity score as a diagnostic channel and baseline scoring component
@@ -125,8 +125,6 @@ The PDF roadmap (Steps 1-8) prescribed a minimal pipeline: three diagnostics (xi
 - **Regression mode** — unified model across all sample sizes with normalized k targets (replaces per-size classification)
 - **Bootstrap 95% confidence intervals** on relative RMSE and ES RMSE
 
-**Currently in progress:**
-- Pathway D (Temporal Transformer) — causal Transformer encoder that outputs time-varying GPD parameters, replacing the fixed rolling-window assumption
 
 ---
 
