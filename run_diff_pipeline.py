@@ -64,7 +64,8 @@ def build_diff_dataset(all_diagnostics, config):
     for ds, diag in all_diagnostics:
         n = int(ds['n'])
         # features
-        F = build_feature_matrix(diag)
+        columns = config.get("features", {}).get("columns")
+        F = build_feature_matrix(diag, columns=columns)
         F = normalize_features(F)
         L = F.shape[0]
         if L < L_max:
@@ -236,13 +237,18 @@ def evaluate_pathway_a(test_groups, config):
     from src.train import predict
     from src.pot import fit_gpd
 
-    ckpt = "outputs/checkpoints/model_regression.pt"
+    feat_cfg = config.get("features", {})
+    in_channels = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
+    tag = feat_cfg.get("tag", "")
+    out_base = f"outputs/{tag}" if tag else "outputs"
+
+    ckpt = f"{out_base}/checkpoints/model_regression.pt"
     if not os.path.exists(ckpt):
         return None
 
     model_cfg = config['model']
     model_a = ThresholdCNN(
-        in_channels=7, channels=model_cfg['channels'],
+        in_channels=in_channels, channels=model_cfg['channels'],
         kernel_size=model_cfg['kernel_size'],
         dropout=model_cfg['dropout'], task='regression',
     )
@@ -391,9 +397,15 @@ def main():
         config = yaml.safe_load(f)
     logger.info("Loaded config from %s", args.config)
 
+    # ── Feature config ─────────────────────────────────────────────────
+    feat_cfg = config.get("features", {})
+    in_channels = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
+    tag = feat_cfg.get("tag", "")
+    out_base = f"outputs/{tag}" if tag else "outputs"
+
     os.makedirs("outputs/data", exist_ok=True)
-    os.makedirs("outputs/checkpoints", exist_ok=True)
-    os.makedirs("outputs/figures/diff", exist_ok=True)
+    os.makedirs(f"{out_base}/checkpoints", exist_ok=True)
+    os.makedirs(f"{out_base}/figures/diff", exist_ok=True)
 
     # ── Steps 1-4: load cached data ────────────────────────────────────
     synthetic_path = "outputs/data/synthetic.pkl"
@@ -454,10 +466,10 @@ def main():
     # ── Step 6d: train model ───────────────────────────────────────────
     diff_cfg = config.get('diff_pot', {})
     model_cfg = config.get('model', {})
-    ckpt_path = "outputs/checkpoints/model_diff.pt"
+    ckpt_path = f"{out_base}/checkpoints/model_diff.pt"
 
     model = DifferentiablePOTModel(
-        in_channels=7,
+        in_channels=in_channels,
         channels=model_cfg.get('channels', [16, 32]),
         kernel_size=model_cfg.get('kernel_size', 5),
         dropout=model_cfg.get('dropout', 0.2),
@@ -516,7 +528,7 @@ def main():
     else:
         logger.warning("  Pathway A model not found — skipping comparison")
 
-    plot_diff_results(res_m, res_a, "outputs/figures/diff")
+    plot_diff_results(res_m, res_a, f"{out_base}/figures/diff")
     logger.info("Pipeline complete.")
 
 

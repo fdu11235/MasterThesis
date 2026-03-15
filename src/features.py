@@ -9,7 +9,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-def build_feature_matrix(diagnostics: dict) -> np.ndarray:
+def build_feature_matrix(diagnostics: dict, columns=None) -> np.ndarray:
     """Stack diagnostic columns into a feature matrix.
 
     Parameters
@@ -22,11 +22,14 @@ def build_feature_matrix(diagnostics: dict) -> np.ndarray:
         - 'hill_series'         : ndarray of shape (L,)
         - 'qq_residual_series'  : ndarray of shape (L,)
         - 'mean_excess_values'  : ndarray of shape (L,)
+    columns : list of int or None
+        Column indices to select from the full 7-column matrix.
+        If None, all 7 columns are returned.
 
     Returns
     -------
-    F : ndarray of shape (L, 7)
-        Columns are [xi_hat, beta_hat, S_gof, S_me, hill, qq_resid, me_values].
+    F : ndarray of shape (L, C)
+        Columns are a subset of [xi_hat, beta_hat, S_gof, S_me, hill, qq_resid, me_values].
     """
     params = np.asarray(diagnostics["params"])                    # (L, 2)
     score_gof = np.asarray(diagnostics["score_gof"])              # (L,)
@@ -45,6 +48,10 @@ def build_feature_matrix(diagnostics: dict) -> np.ndarray:
 
     F = np.column_stack([xi_hat, beta_hat, score_gof, score_me,
                          hill, qq_resid, me_vals])                # (L, 7)
+
+    if columns is not None:
+        F = F[:, columns]
+
     return F
 
 
@@ -104,7 +111,8 @@ def build_dataset(
             k_star = diag["k_star"]
 
             # Build and normalize feature matrix  (L, C)
-            F = build_feature_matrix(diag)
+            columns = config.get("features", {}).get("columns")
+            F = build_feature_matrix(diag, columns=columns)
             F = normalize_features(F)
             feature_matrices.append(F)
 
@@ -169,7 +177,8 @@ def build_dataset_regression(
         k_max = int(k_grid[-1])
 
         # Build and normalize feature matrix (L, C)
-        F = build_feature_matrix(diag)
+        columns = config.get("features", {}).get("columns")
+        F = build_feature_matrix(diag, columns=columns)
         F = normalize_features(F)
 
         # Pad to L_max with zeros

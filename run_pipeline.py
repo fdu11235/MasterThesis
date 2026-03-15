@@ -52,13 +52,19 @@ def main():
         config = yaml.safe_load(f)
     logger.info("Loaded config from %s", args.config)
 
+    # ── Feature config ─────────────────────────────────────────────────
+    feat_cfg = config.get("features", {})
+    in_channels = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
+    tag = feat_cfg.get("tag", "")
+    out_base = f"outputs/{tag}" if tag else "outputs"
+
     if args.fresh:
         logger.info("--fresh flag set: ignoring existing checkpoints")
 
     # ── Output directories ────────────────────────────────────────────────
     os.makedirs("outputs/data", exist_ok=True)
-    os.makedirs("outputs/checkpoints", exist_ok=True)
-    os.makedirs("outputs/figures", exist_ok=True)
+    os.makedirs(f"{out_base}/checkpoints", exist_ok=True)
+    os.makedirs(f"{out_base}/figures", exist_ok=True)
 
     # ── Step 1: Generate synthetic data ───────────────────────────────────
     synthetic_path = "outputs/data/synthetic.pkl"
@@ -107,7 +113,7 @@ def main():
         logger.info("  → X %s, y %s", tuple(X.shape), tuple(y.shape))
 
         # ── Step 6: Single train/test split, train one model ─────────────
-        ckpt_path = "outputs/checkpoints/model_regression.pt"
+        ckpt_path = f"{out_base}/checkpoints/model_regression.pt"
         N = len(X)
         torch.manual_seed(42)
         perm = torch.randperm(N)
@@ -123,7 +129,7 @@ def main():
         if not args.fresh and os.path.exists(ckpt_path):
             logger.info("[Step 6] Loading cached regression model from %s", ckpt_path)
             model = ThresholdCNN(
-                in_channels=7,
+                in_channels=in_channels,
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
@@ -138,7 +144,7 @@ def main():
                 len(X_train), len(X_test),
             )
             model = ThresholdCNN(
-                in_channels=7,
+                in_channels=in_channels,
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
@@ -210,7 +216,7 @@ def main():
                              metrics.get('mae', float('nan')),
                              metrics['es_rmse'], metrics['es_relative_rmse'] * 100, metrics['count'])
 
-            fig_dir = f"outputs/figures/n{n_size}"
+            fig_dir = f"{out_base}/figures/n{n_size}"
             plot_results(results, grp_diags, fig_dir,
                          k_pred=grp_k_pred, k_true=grp_k_true, history=history)
 
@@ -242,12 +248,12 @@ def main():
             X_test, y_test = X[test_idx], y[test_idx]
             test_diags = [group_diags[i] for i in test_idx.tolist()]
 
-            ckpt_path = f"outputs/checkpoints/model_n{n_size}.pt"
+            ckpt_path = f"{out_base}/checkpoints/model_n{n_size}.pt"
 
             if not args.fresh and os.path.exists(ckpt_path):
                 logger.info("[Step 6] Loading cached model for n=%d from %s", n_size, ckpt_path)
                 model = ThresholdCNN(
-                    in_channels=7,
+                    in_channels=in_channels,
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],
@@ -261,7 +267,7 @@ def main():
                     n_size, len(X_train), len(X_test), n_classes,
                 )
                 model = ThresholdCNN(
-                    in_channels=7,
+                    in_channels=in_channels,
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],
@@ -302,7 +308,7 @@ def main():
                              dist_type, metrics['rmse'], metrics['relative_rmse'] * 100,
                              metrics['es_rmse'], metrics['es_relative_rmse'] * 100, metrics['count'])
 
-            fig_dir = f"outputs/figures/n{n_size}"
+            fig_dir = f"{out_base}/figures/n{n_size}"
             plot_results(results, test_diags, fig_dir)
 
     logger.info("Pipeline complete.")

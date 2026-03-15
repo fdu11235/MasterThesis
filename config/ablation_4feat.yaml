@@ -1,6 +1,6 @@
 features:
-  columns: [0, 1, 2, 3, 4, 5, 6]   # 0=xi_hat, 1=beta_hat, 2=AD_GOF, 3=mean_excess_score, 4=hill, 5=qq_resid, 6=me_values
-  tag: ""                            # empty = outputs/ (backward compat)
+  columns: [0, 1, 2, 3]             # xi_hat, beta_hat, AD_GOF, mean_excess_score (original 4)
+  tag: "4feat"                       # outputs go to outputs/4feat/
 
 synthetic:
   sample_sizes: [1000, 2000, 5000]
@@ -63,7 +63,7 @@ diff_pot:
 
 transfer_learning:
   enabled: true
-  pretrained_path: "outputs/checkpoints/model_regression.pt"
+  pretrained_path: "outputs/4feat/checkpoints/model_regression.pt"
   freeze_backbone_epochs: 0
   backbone_lr_factor: 0.1
 

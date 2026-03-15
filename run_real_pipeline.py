@@ -54,13 +54,19 @@ def main():
         config = yaml.safe_load(f)
     logger.info("Loaded config from %s", args.config)
 
+    # ── Feature config ─────────────────────────────────────────────────
+    feat_cfg = config.get("features", {})
+    in_channels = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
+    tag = feat_cfg.get("tag", "")
+    out_base = f"outputs/{tag}" if tag else "outputs"
+
     if args.fresh:
         logger.info("--fresh flag set: ignoring existing checkpoints")
 
     # ── Output directories ────────────────────────────────────────────────
     os.makedirs("outputs/data", exist_ok=True)
-    os.makedirs("outputs/checkpoints", exist_ok=True)
-    os.makedirs("outputs/figures/real", exist_ok=True)
+    os.makedirs(f"{out_base}/checkpoints", exist_ok=True)
+    os.makedirs(f"{out_base}/figures/real", exist_ok=True)
 
     # ── Step 1: Load real data ────────────────────────────────────────────
     real_ds_path = "outputs/data/real_datasets.pkl"
@@ -180,14 +186,14 @@ def main():
     tl_enabled = tl_cfg.get("enabled", False)
 
     # ── Step 6: Train CNN (unconditional) ─────────────────────────────────
-    ckpt_path = "outputs/checkpoints/model_real.pt"
+    ckpt_path = f"{out_base}/checkpoints/model_real.pt"
     if tl_enabled:
-        ckpt_path = "outputs/checkpoints/model_real_transfer.pt"
+        ckpt_path = f"{out_base}/checkpoints/model_real_transfer.pt"
 
     if not args.fresh and os.path.exists(ckpt_path):
         logger.info("[Step 6] Loading cached model from %s", ckpt_path)
         model = ThresholdCNN(
-            in_channels=7,
+            in_channels=in_channels,
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
@@ -200,7 +206,7 @@ def main():
         logger.info("[Step 6] Training regression model (train=%d, test=%d) …",
                      len(X_train), len(X_test))
         model = ThresholdCNN(
-            in_channels=7,
+            in_channels=in_channels,
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
@@ -234,14 +240,14 @@ def main():
         logger.info("  → checkpoint saved to %s", ckpt_path)
 
     # ── Step 6b: Train CNN on GARCH-filtered features ─────────────────────
-    garch_ckpt_path = "outputs/checkpoints/model_real_garch.pt"
+    garch_ckpt_path = f"{out_base}/checkpoints/model_real_garch.pt"
     if tl_enabled:
-        garch_ckpt_path = "outputs/checkpoints/model_real_garch_transfer.pt"
+        garch_ckpt_path = f"{out_base}/checkpoints/model_real_garch_transfer.pt"
 
     if not args.fresh and os.path.exists(garch_ckpt_path):
         logger.info("[Step 6b] Loading cached GARCH model from %s", garch_ckpt_path)
         garch_model = ThresholdCNN(
-            in_channels=7,
+            in_channels=in_channels,
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
@@ -254,7 +260,7 @@ def main():
         logger.info("[Step 6b] Training GARCH regression model (train=%d, test=%d) …",
                      len(gX_train), len(gX_test))
         garch_model = ThresholdCNN(
-            in_channels=7,
+            in_channels=in_channels,
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
@@ -378,7 +384,7 @@ def main():
         logger.info("=" * 60)
 
     # Plot
-    plot_real_results(results, "outputs/figures/real",
+    plot_real_results(results, f"{out_base}/figures/real",
                       history=history, garch_history=garch_history)
 
     logger.info("Real-data pipeline complete.")
