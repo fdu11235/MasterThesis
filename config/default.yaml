@@ -68,6 +68,6 @@ realdata:
   start: "1960-01-01"
   end: "2025-12-31"
   window_size: 1000
-  step_size: 50
-  backtest_horizon: 50
+  step_size: 5
+  backtest_horizon: 5
   train_fraction: 0.8
