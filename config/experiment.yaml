@@ -1,0 +1,77 @@
+features:
+  columns: [0, 1, 2, 3, 4, 5, 6]   # 0=xi_hat, 1=beta_hat, 2=AD_GOF, 3=mean_excess_score, 4=hill, 5=qq_resid, 6=me_values
+  tag: "exp"                         # outputs to outputs/exp/ — never touches main outputs
+
+synthetic:
+  sample_sizes: [1000, 2000, 5000]
+  n_replications: 200
+  seed: 42
+  distributions:
+    student_t:
+      df: [3, 4, 5]
+    pareto:
+      alpha: [1.5, 2.0, 3.0]
+    lognormal_pareto_mix:
+      lognormal_mu: 0.0
+      lognormal_sigma: 1.0
+      pareto_alpha: [1.5, 2.0]
+      mix_frac: 0.1
+    two_pareto:
+      alpha1: [2.0, 3.0]
+      alpha2: [1.0, 1.5]
+      changepoint_frac: 0.05
+
+pot:
+  k_min: 30
+  k_max_frac: 0.15
+  delta: 5
+  weights: [1.0, 1.0, 1.0]
+  decluster: true
+  decluster_run_length: 10
+
+model:
+  task: regression       # 'classification' or 'regression'
+  channels: [64, 128]
+  kernel_size: 7
+  dropout: 0.2
+  lr: 0.001
+  batch_size: 64
+  max_epochs: 500
+  patience: 30
+
+evaluate:
+  agreement_radii: [5, 10]
+  quantile_p: 0.99
+  test_fraction: 0.2
+
+diff_pot:
+  temperature_start: 5.0
+  temperature_end: 20.0
+  temperature_anneal: false
+  temperature_u: 50.0
+  quantiles: [0.95, 0.975, 0.99]
+  quantile_weights: [0.2, 0.3, 0.5]
+  pinball_weight: 0.7
+  es_weight: 0.3
+  k_aux_weight: 0.0
+  lr: 0.0005
+  batch_size: 32
+  max_epochs: 300
+  patience: 30
+  warm_start_from: null
+  xi_clamp: [-0.5, 0.95]
+
+transfer_learning:
+  enabled: true
+  pretrained_path: "outputs/checkpoints/model_regression.pt"
+  freeze_backbone_epochs: 0
+  backbone_lr_factor: 0.1
+
+realdata:
+  tickers: ["^GSPC", "^IXIC", "^FTSE", "^N225", "^GDAXI"]
+  start: "1960-01-01"
+  end: "2025-12-31"
+  window_size: 1000
+  step_size: 5
+  backtest_horizon: 5
+  train_fraction: 0.8

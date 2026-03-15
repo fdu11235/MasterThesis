@@ -1,0 +1,2 @@
+exp_id	description	mean_rel_rmse	n1000	n2000	n5000	es_rel_rmse	epochs	status	decision	timestamp
+0	baseline	20.65	22.51	22.97	16.47	85.70	94	ok	baseline	2026-03-16T00:18:18+01:00
