@@ -146,7 +146,6 @@ The PDF roadmap (Steps 1-8) prescribed a minimal pipeline: three diagnostics (xi
 - **Statistical backtesting suite** — Kupiec proportion-of-failures, Christoffersen conditional coverage, and McNeil-Frey ES tests
 - **Transfer learning** — pre-train on synthetic data, fine-tune on real-data pseudo-labels with discriminative learning rates (backbone at 0.1x)
 - **GARCH(1,1) filtering** — McNeil & Frey (2000) approach: fit GARCH to signed returns, apply POT to standardized residuals, scale VaR/ES back by forecasted volatility
-- **Differentiable POT pipeline (Pathway M)** — end-to-end differentiable threshold selection via sigmoid soft-masking, probability-weighted-moment GPD estimation, and direct VaR/ES optimization with pinball + Fissler-Ziegel joint loss (bypasses proxy-label misalignment)
 - **Regression mode** — unified model across all sample sizes with normalized k targets (replaces per-size classification)
 - **Bootstrap 95% confidence intervals** on relative RMSE and ES RMSE
 
