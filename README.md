@@ -61,18 +61,18 @@ ES is computed from the GPD closed-form formula ES(p) = (VaR(p) + beta - xi * u)
 
 | Sample size | VaR Rel. RMSE | ES Rel. RMSE | ES 95% CI |
 |-------------|---------------|--------------|-----------|
-| n=1000 | 22.5% | 94.1% | [72.4%, 116.1%] |
-| n=2000 | 23.0% | 93.9% | [74.0%, 112.3%] |
-| n=5000 | 16.5% | 69.1% | [52.7%, 84.9%] |
+| n=1000 | 22.7% | 100.2% | [76.9%, 123.5%] |
+| n=2000 | 22.5% | 94.0% | [74.9%, 110.2%] |
+| n=5000 | 15.8% | 61.6% | [47.5%, 74.6%] |
 
-The high overall ES RMSE is driven almost entirely by the two-Pareto distribution (119-153% ES RMSE), whose regime change makes the tail especially hard to capture. The other families perform well:
+The high overall ES RMSE is driven almost entirely by the two-Pareto distribution (106-165% ES RMSE), whose regime change makes the tail especially hard to capture. The other families perform well:
 
 | Distribution (n=5000) | VaR Rel. RMSE | ES Rel. RMSE |
 |------------------------|---------------|--------------|
-| Student-t | 25.6% | 7.2% |
-| Lognormal-Pareto mix | 4.6% | 10.7% |
-| Pareto | 7.1% | 28.9% |
-| Two-Pareto | 17.4% | **119.4%** |
+| Student-t | 25.6% | 7.1% |
+| Lognormal-Pareto mix | 4.6% | 10.6% |
+| Pareto | 7.2% | 28.1% |
+| Two-Pareto | 15.3% | **105.8%** |
 
 **Diagnostic curves** — xi(k), Anderson-Darling GOF(k), and composite Score(k) for example datasets (n=1000), with baseline k* marked:
 
