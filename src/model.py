@@ -25,7 +25,7 @@ class ThresholdCNN(nn.Module):
         self.conv = nn.Sequential(*layers)
         self.pool = nn.AdaptiveAvgPool1d(1)
 
-        hidden = prev_ch // 2
+        hidden = prev_ch
         if task == "regression":
             self.head = nn.Sequential(
                 nn.Dropout(dropout),
