@@ -25,16 +25,21 @@ class ThresholdCNN(nn.Module):
         self.conv = nn.Sequential(*layers)
         self.pool = nn.AdaptiveAvgPool1d(1)
 
+        hidden = prev_ch // 2
         if task == "regression":
             self.head = nn.Sequential(
                 nn.Dropout(dropout),
-                nn.Linear(prev_ch, 1),
+                nn.Linear(prev_ch, hidden),
+                nn.ReLU(),
+                nn.Linear(hidden, 1),
                 nn.Sigmoid(),
             )
         else:
             self.head = nn.Sequential(
                 nn.Dropout(dropout),
-                nn.Linear(prev_ch, n_classes),
+                nn.Linear(prev_ch, hidden),
+                nn.ReLU(),
+                nn.Linear(hidden, n_classes),
             )
 
     def load_pretrained_backbone(self, state_dict):
