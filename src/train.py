@@ -67,7 +67,7 @@ def train_model(X, y, model, config, task="classification"):
     )
 
     if task == "regression":
-        criterion = nn.SmoothL1Loss()
+        criterion = nn.MSELoss()
     else:
         criterion = nn.CrossEntropyLoss()
 
