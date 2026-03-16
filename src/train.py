@@ -7,6 +7,8 @@ from torch.utils.data import DataLoader, TensorDataset
 
 logger = logging.getLogger(__name__)
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def train_model(X, y, model, config, task="classification"):
     """Train model with early stopping on validation loss.
@@ -21,14 +23,17 @@ def train_model(X, y, model, config, task="classification"):
     Returns:
         tuple of (trained model with best weights loaded, history dict)
     """
+    model = model.to(device)
+    logger.info("Training on device: %s", device)
+
     test_frac = config.get('test_fraction', 0.2)
     n = len(X)
     perm = torch.randperm(n)
     val_size = int(n * test_frac)
     val_idx, train_idx = perm[:val_size], perm[val_size:]
 
-    X_train, y_train = X[train_idx], y[train_idx]
-    X_val, y_val = X[val_idx], y[val_idx]
+    X_train, y_train = X[train_idx].to(device), y[train_idx].to(device)
+    X_val, y_val = X[val_idx].to(device), y[val_idx].to(device)
     logger.info("Train/val split: %d train, %d val", len(X_train), len(X_val))
 
     train_loader = DataLoader(
@@ -134,6 +139,7 @@ def train_model(X, y, model, config, task="classification"):
     logger.info("Training complete — best val_loss=%.4f", best_val_loss)
     if best_state is not None:
         model.load_state_dict(best_state)
+    model = model.cpu()
     return model, history
 
 
@@ -148,9 +154,11 @@ def predict(model, X, task="classification"):
     Returns:
         ndarray of shape (N,) — class indices (classification) or float values in [0,1] (regression)
     """
+    model = model.to(device)
+    X = X.to(device)
     model.eval()
     with torch.no_grad():
         out = model(X)
         if task == "regression":
-            return out.numpy()
-        return out.argmax(dim=1).numpy()
+            return out.cpu().numpy()
+        return out.cpu().argmax(dim=1).numpy()
