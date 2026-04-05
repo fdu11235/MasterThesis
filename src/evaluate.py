@@ -12,6 +12,7 @@ from scipy.stats import genpareto
 from src.synthetic import (
     _generate_student_t, _generate_pareto,
     _generate_lognormal_pareto_mix, _generate_two_pareto,
+    _generate_log_gamma, _generate_gamma_pareto_splice,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,10 @@ def _mc_quantile(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
         samples = _generate_lognormal_pareto_mix(rng, n_mc, **dist_params)
     elif dist_type == 'two_pareto':
         samples = _generate_two_pareto(rng, n_mc, **dist_params)
+    elif dist_type == 'log_gamma':
+        samples = _generate_log_gamma(rng, n_mc, **dist_params)
+    elif dist_type == 'gamma_pareto_splice':
+        samples = _generate_gamma_pareto_splice(rng, n_mc, **dist_params)
     else:
         raise ValueError(f"No MC quantile for {dist_type}")
     return float(np.quantile(samples, p))
@@ -98,7 +103,20 @@ def true_quantile(dist_type, dist_params, p):
         return abs(stats.t.ppf(p, df=dist_params['df']))
     elif dist_type == 'pareto':
         return stats.pareto.ppf(p, b=dist_params['alpha'])
-    elif dist_type in ('lognormal_pareto_mix', 'two_pareto'):
+    elif dist_type == 'burr12':
+        return stats.burr12.ppf(p, c=dist_params['c'], d=dist_params['d'])
+    elif dist_type == 'frechet':
+        return stats.invweibull.ppf(p, c=dist_params['c'])
+    elif dist_type == 'dagum':
+        return stats.burr.ppf(p, c=dist_params['c'], d=dist_params['d'])
+    elif dist_type == 'inverse_gamma':
+        return stats.invgamma.ppf(p, a=dist_params['a'])
+    elif dist_type == 'lognormal':
+        return stats.lognorm.ppf(p, s=dist_params['sigma'])
+    elif dist_type == 'weibull_stretched':
+        return stats.weibull_min.ppf(p, c=dist_params['c'])
+    elif dist_type in ('lognormal_pareto_mix', 'two_pareto',
+                        'log_gamma', 'gamma_pareto_splice'):
         key = _params_key(dist_type, dist_params, p)
         if key not in _mc_quantile_cache:
             logger.info("Computing MC quantile for %s (p=%s) ...", dist_type, p)
@@ -115,6 +133,14 @@ def _mc_es(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
         'pareto': lambda: stats.pareto.rvs(b=dist_params['alpha'], size=n_mc, random_state=rng),
         'lognormal_pareto_mix': lambda: _generate_lognormal_pareto_mix(rng, n_mc, **dist_params),
         'two_pareto': lambda: _generate_two_pareto(rng, n_mc, **dist_params),
+        'burr12': lambda: stats.burr12.rvs(c=dist_params['c'], d=dist_params['d'], size=n_mc, random_state=rng),
+        'frechet': lambda: stats.invweibull.rvs(c=dist_params['c'], size=n_mc, random_state=rng),
+        'dagum': lambda: stats.burr.rvs(c=dist_params['c'], d=dist_params['d'], size=n_mc, random_state=rng),
+        'inverse_gamma': lambda: stats.invgamma.rvs(a=dist_params['a'], size=n_mc, random_state=rng),
+        'lognormal': lambda: stats.lognorm.rvs(s=dist_params['sigma'], size=n_mc, random_state=rng),
+        'weibull_stretched': lambda: stats.weibull_min.rvs(c=dist_params['c'], size=n_mc, random_state=rng),
+        'log_gamma': lambda: _generate_log_gamma(rng, n_mc, **dist_params),
+        'gamma_pareto_splice': lambda: _generate_gamma_pareto_splice(rng, n_mc, **dist_params),
     }
     if dist_type not in generators:
         raise ValueError(f"No MC ES for {dist_type}")
@@ -317,6 +343,48 @@ def plot_training_curves(history, save_dir):
     fig.tight_layout()
     fig.savefig(os.path.join(save_dir, "training_curves.png"), dpi=150)
     plt.close(fig)
+
+    # Loss decomposition plot (if VaR-aware components are tracked)
+    has_components = (history.get("train_L_k") and
+                      any(v > 0 for v in history["train_L_k"]))
+    if has_components:
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
+
+        # Top-left: total loss
+        axes[0, 0].plot(epochs, history["train_loss"], label="Train", lw=1.2)
+        axes[0, 0].plot(epochs, history["val_loss"], label="Val", lw=1.2)
+        axes[0, 0].axvline(best_epoch, color='r', ls='--', lw=0.8)
+        axes[0, 0].set_ylabel("Loss")
+        axes[0, 0].set_title("Total Loss")
+        axes[0, 0].legend(fontsize=8)
+
+        # Top-right: L_k (k* prediction)
+        axes[0, 1].plot(epochs, history["train_L_k"], label="Train L_k", lw=1.2)
+        axes[0, 1].plot(epochs, history["val_L_k"], label="Val L_k", lw=1.2)
+        axes[0, 1].set_ylabel("Loss")
+        axes[0, 1].set_title("L_k (k* prediction)")
+        axes[0, 1].legend(fontsize=8)
+
+        # Bottom-left: L_var (VaR quality)
+        axes[1, 0].plot(epochs, history["train_L_var"], label="Train L_var", lw=1.2, color='tab:orange')
+        axes[1, 0].plot(epochs, history["val_L_var"], label="Val L_var", lw=1.2, color='tab:red')
+        axes[1, 0].set_ylabel("Loss")
+        axes[1, 0].set_xlabel("Epoch")
+        axes[1, 0].set_title("L_var (VaR quality)")
+        axes[1, 0].legend(fontsize=8)
+
+        # Bottom-right: L_es (ES quality)
+        axes[1, 1].plot(epochs, history["train_L_es"], label="Train L_es", lw=1.2, color='tab:green')
+        axes[1, 1].plot(epochs, history["val_L_es"], label="Val L_es", lw=1.2, color='tab:purple')
+        axes[1, 1].set_ylabel("Loss")
+        axes[1, 1].set_xlabel("Epoch")
+        axes[1, 1].set_title("L_es (ES quality)")
+        axes[1, 1].legend(fontsize=8)
+
+        fig.suptitle("Loss Decomposition: k* + VaR + ES", fontsize=13)
+        fig.tight_layout()
+        fig.savefig(os.path.join(save_dir, "loss_decomposition.png"), dpi=150)
+        plt.close(fig)
 
 
 def plot_pred_vs_true(k_pred, k_true, dist_types, save_dir):
@@ -643,11 +711,27 @@ def plot_results(results, all_diagnostics, save_dir,
             if dt == 'student_t':
                 return f't(df={dp.get("df", "?")})'
             elif dt == 'pareto':
-                return f'Pareto(α={dp.get("alpha", "?")})'
+                return f'Pareto(a={dp.get("alpha", "?")})'
             elif dt == 'lognormal_pareto_mix':
-                return f'LN-Par(α={dp.get("pareto_alpha", "?")})'
+                return f'LN-Par(a={dp.get("pareto_alpha", "?")})'
             elif dt == 'two_pareto':
                 return f'2Par({dp.get("alpha1", "?")},{dp.get("alpha2", "?")})'
+            elif dt == 'burr12':
+                return f'Burr12(c={dp.get("c", "?")},d={dp.get("d", "?")})'
+            elif dt == 'frechet':
+                return f'Frechet(c={dp.get("c", "?")})'
+            elif dt == 'dagum':
+                return f'Dagum(c={dp.get("c", "?")},d={dp.get("d", "?")})'
+            elif dt == 'inverse_gamma':
+                return f'InvGa(a={dp.get("a", "?")})'
+            elif dt == 'lognormal':
+                return f'LN(s={dp.get("sigma", "?")})'
+            elif dt == 'weibull_stretched':
+                return f'Weib(c={dp.get("c", "?")})'
+            elif dt == 'log_gamma':
+                return f'LogGa(b={dp.get("b", "?")},p={dp.get("p", "?")})'
+            elif dt == 'gamma_pareto_splice':
+                return f'Ga-Par(k={dp.get("gamma_shape", "?")},a={dp.get("pareto_alpha", "?")})'
             return dt
 
         labels = [_make_label(dt, dp) for dt, dp in zip(dist_types, dist_params_list)]

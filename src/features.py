@@ -215,3 +215,93 @@ def build_dataset_regression(
     )
 
     return X, y, meta
+
+
+def build_var_es_curves(
+    all_diagnostics: list,
+    config: dict,
+    L_max: int,
+) -> tuple:
+    """Precompute normalised VaR and ES curves for VaR-aware training.
+
+    For each dataset, computes VaR(k) and ES(k) at every k in k_grid,
+    normalises by the true quantile/ES (ratio: 1.0 = perfect), clips
+    extremes, and zero-pads to L_max.
+
+    Parameters
+    ----------
+    all_diagnostics : list of (dataset_dict, diagnostics_dict)
+    config : dict with 'evaluate.quantile_p'
+    L_max : int, maximum k_grid length (for padding)
+
+    Returns
+    -------
+    var_curves : Tensor (N, L_max) — normalised VaR ratios, 0 in padded region
+    es_curves : Tensor (N, L_max) — normalised ES ratios, 0 in padded region
+    """
+    from src.evaluate import pot_quantile, pot_es, true_quantile, true_es
+
+    p = config.get("evaluate", {}).get("quantile_p", 0.99)
+    CLIP_LO, CLIP_HI = 0.1, 10.0
+
+    var_curves = []
+    es_curves = []
+
+    for ds, diag in all_diagnostics:
+        k_grid = np.asarray(diag["k_grid"])
+        params = np.asarray(diag["params"])
+        sorted_desc = np.sort(ds["samples"])[::-1]
+        n = len(sorted_desc)
+        L = len(k_grid)
+
+        # Compute true quantile/ES
+        dist_type = ds.get("dist_type", "unknown")
+        dist_params = ds.get("params", {})
+        try:
+            var_true = true_quantile(dist_type, dist_params, p)
+            es_true = true_es(dist_type, dist_params, p)
+        except (ValueError, KeyError):
+            var_true, es_true = 1.0, 1.0  # fallback for real data
+
+        if var_true <= 0 or np.isnan(var_true):
+            var_true = 1.0
+        if es_true <= 0 or np.isnan(es_true):
+            es_true = 1.0
+
+        # VaR/ES at every k
+        var_k = np.zeros(L, dtype=np.float64)
+        es_k = np.zeros(L, dtype=np.float64)
+        for i, k in enumerate(k_grid):
+            xi, beta = params[i]
+            if np.isnan(xi) or np.isnan(beta):
+                var_k[i] = 1.0  # neutral
+                es_k[i] = 1.0
+            else:
+                var_k[i] = pot_quantile(sorted_desc, int(k), xi, beta, n, p)
+                es_k[i] = pot_es(sorted_desc, int(k), xi, beta, n, p)
+
+        # Normalise to ratio (1.0 = perfect)
+        var_ratio = np.clip(var_k / var_true, CLIP_LO, CLIP_HI)
+        es_ratio = np.clip(es_k / es_true, CLIP_LO, CLIP_HI)
+
+        # Replace any remaining NaN/Inf
+        var_ratio = np.nan_to_num(var_ratio, nan=1.0, posinf=CLIP_HI, neginf=CLIP_LO)
+        es_ratio = np.nan_to_num(es_ratio, nan=1.0, posinf=CLIP_HI, neginf=CLIP_LO)
+
+        # Pad to L_max
+        if L < L_max:
+            var_ratio = np.concatenate([var_ratio, np.zeros(L_max - L)])
+            es_ratio = np.concatenate([es_ratio, np.zeros(L_max - L)])
+
+        var_curves.append(var_ratio)
+        es_curves.append(es_ratio)
+
+    var_t = torch.tensor(np.stack(var_curves), dtype=torch.float32)
+    es_t = torch.tensor(np.stack(es_curves), dtype=torch.float32)
+
+    logger.info("VaR/ES curves: %d samples, L_max=%d, var range=[%.2f, %.2f], es range=[%.2f, %.2f]",
+                len(var_curves), L_max,
+                var_t[var_t > 0].min().item(), var_t.max().item(),
+                es_t[es_t > 0].min().item(), es_t.max().item())
+
+    return var_t, es_t

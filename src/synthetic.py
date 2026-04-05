@@ -1,10 +1,24 @@
 """Synthetic data generation for POT/GPD threshold selection experiments.
 
-Provides four distribution families with heavy-tailed behaviour:
+Provides twelve distribution families with diverse tail behaviour:
+
+  Fréchet MDA (xi > 0, power-law tails):
   - Student-t (absolute values)
   - Pareto
   - Lognormal-Pareto mixture
   - Two-Pareto (regime change)
+  - Burr XII (Singh-Maddala)
+  - Fréchet (inverse Weibull)
+  - Dagum (Burr III)
+  - Inverse Gamma (Vinci)
+  - Log-Gamma
+
+  Gumbel MDA (xi = 0, subexponential / stretched-exponential):
+  - Lognormal (pure)
+  - Weibull (stretched, c < 1)
+
+  Mixture / splice:
+  - Gamma-Pareto splice
 
 Usage:
     from src.synthetic import generate_all
@@ -101,6 +115,85 @@ def _generate_two_pareto(
     return bulk
 
 
+def _generate_burr12(
+    rng: np.random.RandomState, n: int, c: float, d: float
+) -> np.ndarray:
+    """Burr XII (Singh-Maddala) samples. Tail index xi = 1/(c*d)."""
+    return stats.burr12.rvs(c=c, d=d, size=n, random_state=rng)
+
+
+def _generate_frechet(
+    rng: np.random.RandomState, n: int, c: float
+) -> np.ndarray:
+    """Fréchet (inverse Weibull) samples. Tail index xi = 1/c."""
+    return stats.invweibull.rvs(c=c, size=n, random_state=rng)
+
+
+def _generate_dagum(
+    rng: np.random.RandomState, n: int, c: float, d: float
+) -> np.ndarray:
+    """Dagum (Burr III) samples. Tail index xi = 1/c."""
+    return stats.burr.rvs(c=c, d=d, size=n, random_state=rng)
+
+
+def _generate_inverse_gamma(
+    rng: np.random.RandomState, n: int, a: float
+) -> np.ndarray:
+    """Inverse Gamma (Vinci) samples. Tail index xi = 1/a."""
+    return stats.invgamma.rvs(a=a, size=n, random_state=rng)
+
+
+def _generate_lognormal(
+    rng: np.random.RandomState, n: int, sigma: float
+) -> np.ndarray:
+    """Lognormal samples (Gumbel MDA, xi = 0)."""
+    return stats.lognorm.rvs(s=sigma, size=n, random_state=rng)
+
+
+def _generate_weibull_stretched(
+    rng: np.random.RandomState, n: int, c: float
+) -> np.ndarray:
+    """Stretched Weibull samples with c < 1 (Gumbel MDA, xi = 0)."""
+    return stats.weibull_min.rvs(c=c, size=n, random_state=rng)
+
+
+def _generate_log_gamma(
+    rng: np.random.RandomState, n: int, b: float, p: float
+) -> np.ndarray:
+    """Log-Gamma samples: X = exp(Y), Y ~ Gamma(shape=p, scale=1/b).
+
+    Generalises Pareto Type I (p=1 recovers Pareto). Tail index xi = 1/b.
+    """
+    y = stats.gamma.rvs(a=p, scale=1.0 / b, size=n, random_state=rng)
+    return np.exp(y)
+
+
+def _generate_gamma_pareto_splice(
+    rng: np.random.RandomState,
+    n: int,
+    gamma_shape: float,
+    pareto_alpha: float,
+    splice_quantile: float,
+) -> np.ndarray:
+    """Gamma body with Pareto tail spliced at a high quantile.
+
+    Samples below *splice_quantile* come from Gamma(gamma_shape);
+    those above are replaced with Pareto(pareto_alpha) draws scaled
+    so the splice is continuous at the threshold.
+    """
+    samples = stats.gamma.rvs(a=gamma_shape, size=n, random_state=rng)
+    threshold = np.quantile(samples, splice_quantile)
+    above = samples > threshold
+    n_tail = int(above.sum())
+    if n_tail > 0:
+        tail = stats.pareto.rvs(
+            b=pareto_alpha, size=n_tail, random_state=rng
+        ) * threshold
+        samples[above] = tail
+    rng.shuffle(samples)
+    return samples
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -139,6 +232,16 @@ def generate_dataset(
             rng, n, **dist_params
         ),
         "two_pareto": lambda: _generate_two_pareto(rng, n, **dist_params),
+        "burr12": lambda: _generate_burr12(rng, n, **dist_params),
+        "frechet": lambda: _generate_frechet(rng, n, **dist_params),
+        "dagum": lambda: _generate_dagum(rng, n, **dist_params),
+        "inverse_gamma": lambda: _generate_inverse_gamma(rng, n, **dist_params),
+        "lognormal": lambda: _generate_lognormal(rng, n, **dist_params),
+        "weibull_stretched": lambda: _generate_weibull_stretched(rng, n, **dist_params),
+        "log_gamma": lambda: _generate_log_gamma(rng, n, **dist_params),
+        "gamma_pareto_splice": lambda: _generate_gamma_pareto_splice(
+            rng, n, **dist_params
+        ),
     }
 
     if dist_type not in generators:
@@ -184,6 +287,43 @@ def _param_combos(dist_type: str, dist_cfg: dict) -> list[dict[str, Any]]:
             {"alpha1": a1, "alpha2": a2, "changepoint_frac": cp}
             for a1, a2 in itertools.product(
                 dist_cfg["alpha1"], dist_cfg["alpha2"]
+            )
+        ]
+
+    if dist_type == "burr12":
+        return [
+            {"c": c, "d": d}
+            for c, d in itertools.product(dist_cfg["c"], dist_cfg["d"])
+        ]
+
+    if dist_type == "frechet":
+        return [{"c": c} for c in dist_cfg["c"]]
+
+    if dist_type == "dagum":
+        return [
+            {"c": c, "d": d}
+            for c, d in itertools.product(dist_cfg["c"], dist_cfg["d"])
+        ]
+
+    if dist_type == "inverse_gamma":
+        return [{"a": a} for a in dist_cfg["a"]]
+
+    if dist_type == "lognormal":
+        return [{"sigma": s} for s in dist_cfg["sigma"]]
+
+    if dist_type == "weibull_stretched":
+        return [{"c": c} for c in dist_cfg["c"]]
+
+    if dist_type == "log_gamma":
+        p = dist_cfg["p"]
+        return [{"b": b, "p": p} for b in dist_cfg["b"]]
+
+    if dist_type == "gamma_pareto_splice":
+        sq = dist_cfg["splice_quantile"]
+        return [
+            {"gamma_shape": gs, "pareto_alpha": pa, "splice_quantile": sq}
+            for gs, pa in itertools.product(
+                dist_cfg["gamma_shape"], dist_cfg["pareto_alpha"]
             )
         ]
 

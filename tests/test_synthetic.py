@@ -33,6 +33,40 @@ class TestGenerateDataset:
         assert np.any(result["samples"] > 0)
 
 
+class TestNewDistributions:
+    """Tests for newly added distribution generators."""
+
+    @pytest.mark.parametrize("dist_type,params", [
+        ("burr12", {"c": 2, "d": 1}),
+        ("frechet", {"c": 3.0}),
+        ("dagum", {"c": 2, "d": 1}),
+        ("inverse_gamma", {"a": 3}),
+        ("lognormal", {"sigma": 1.0}),
+        ("weibull_stretched", {"c": 0.6}),
+        ("log_gamma", {"b": 2.0, "p": 2.0}),
+        ("gamma_pareto_splice", {"gamma_shape": 2, "pareto_alpha": 1.5, "splice_quantile": 0.9}),
+    ])
+    def test_values_positive(self, dist_type, params):
+        result = generate_dataset(dist_type, params, n=500, seed=42)
+        assert result["samples"].shape == (500,)
+        assert np.all(result["samples"] > 0)
+
+    @pytest.mark.parametrize("dist_type,params", [
+        ("burr12", {"c": 5, "d": 2}),
+        ("frechet", {"c": 2.0}),
+        ("dagum", {"c": 5, "d": 2}),
+        ("inverse_gamma", {"a": 5}),
+        ("lognormal", {"sigma": 0.5}),
+        ("weibull_stretched", {"c": 0.4}),
+        ("log_gamma", {"b": 1.5, "p": 2.0}),
+        ("gamma_pareto_splice", {"gamma_shape": 3, "pareto_alpha": 2.0, "splice_quantile": 0.9}),
+    ])
+    def test_reproducibility(self, dist_type, params):
+        a = generate_dataset(dist_type, params, n=200, seed=7)
+        b = generate_dataset(dist_type, params, n=200, seed=7)
+        np.testing.assert_array_equal(a["samples"], b["samples"])
+
+
 class TestGenerateAll:
     """Tests for generate_all."""
 
@@ -51,3 +85,36 @@ class TestGenerateAll:
         assert len(datasets) == 2
         for ds in datasets:
             assert set(ds.keys()) == {"samples", "params", "dist_type", "n"}
+
+    def test_all_distributions_count(self):
+        """All 12 distribution families with minimal params produce correct count."""
+        config = {
+            "sample_sizes": [100],
+            "n_replications": 1,
+            "seed": 0,
+            "distributions": {
+                "student_t": {"df": [3]},
+                "pareto": {"alpha": [2.0]},
+                "lognormal_pareto_mix": {
+                    "lognormal_mu": 0.0, "lognormal_sigma": 1.0,
+                    "pareto_alpha": [1.5], "mix_frac": 0.1,
+                },
+                "two_pareto": {
+                    "alpha1": [2.0], "alpha2": [1.0], "changepoint_frac": 0.05,
+                },
+                "burr12": {"c": [2], "d": [1]},
+                "frechet": {"c": [3.0]},
+                "dagum": {"c": [2], "d": [1]},
+                "inverse_gamma": {"a": [3]},
+                "lognormal": {"sigma": [1.0]},
+                "weibull_stretched": {"c": [0.6]},
+                "log_gamma": {"b": [2.0], "p": 2.0},
+                "gamma_pareto_splice": {
+                    "gamma_shape": [2], "pareto_alpha": [1.5],
+                    "splice_quantile": 0.9,
+                },
+            },
+        }
+        datasets = generate_all(config)
+        # 12 distributions x 1 combo each x 1 size x 1 rep = 12
+        assert len(datasets) == 12

@@ -20,24 +20,51 @@ synthetic:
       alpha1: [2.0, 3.0]
       alpha2: [1.0, 1.5]
       changepoint_frac: 0.05
+    burr12:
+      c: [2, 5]
+      d: [1, 2]
+    frechet:
+      c: [2.0, 3.0, 5.0]
+    dagum:
+      c: [2, 5]
+      d: [1, 2]
+    inverse_gamma:
+      a: [2, 3, 5]
+    lognormal:
+      sigma: [0.5, 1.0, 2.0]
+    weibull_stretched:
+      c: [0.4, 0.6, 0.8]
+    log_gamma:
+      b: [1.5, 2.0, 3.0]
+      p: 2.0
+    gamma_pareto_splice:
+      gamma_shape: [2, 3]
+      pareto_alpha: [1.5, 2.0]
+      splice_quantile: 0.9
 
 pot:
   k_min: 30
   k_max_frac: 0.15
   delta: 5
-  weights: [1.0, 1.0, 1.0]
+  weights: [1.0, 1.0, 1.0, 2.0]  # stability, GoF, penalty, mean_excess
   decluster: true
   decluster_run_length: 10
 
 model:
   task: regression       # 'classification' or 'regression'
-  channels: [32, 64]
-  kernel_size: 7
+  channels: [64, 128, 128]
+  kernel_size: 5
   dropout: 0.2
-  lr: 0.001
+  pool_sizes: [1, 4, 8]
+  lr: 0.0005
   batch_size: 64
   max_epochs: 500
   patience: 30
+  loss_type: "asymmetric"      # "smooth_l1", "asymmetric", or "var_aware"
+  asymmetric_weight: 2.0
+  loss_alpha: 1.0              # k* prediction weight
+  loss_beta: 0.5               # VaR quality weight
+  loss_gamma: 0.3              # ES quality weight
 
 evaluate:
   agreement_radii: [5, 10]
@@ -67,11 +94,20 @@ transfer_learning:
   freeze_backbone_epochs: 0
   backbone_lr_factor: 0.1
 
+perturbation:
+  deletion_fractions: [0.05, 0.10, 0.20]
+  n_bootstrap_replications: 5
+  seed: 12345
+  augment_training: true
+  augment_deletion_frac: 0.10
+  augment_n_bootstrap: 1
+
 realdata:
-  tickers: ["^GSPC", "^IXIC", "^FTSE", "^N225", "^GDAXI"]
+  tickers: ["^NYFANG", "AAPL", "MSFT", "NVDA", "AMZN", "META", "BTC-USD", "ETH-USD"]
   start: "1960-01-01"
   end: "2025-12-31"
   window_size: 1000
   step_size: 5
   backtest_horizon: 5
   train_fraction: 0.8
+  tail_modes: ["abs", "loss", "profit"]

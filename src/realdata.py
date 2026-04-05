@@ -237,3 +237,158 @@ def prepare_real_datasets_garch(config, returns_lookup, datasets, cache_dir="out
     logger.info("GARCH-filtered windows: %d total, %d converged",
                 len(garch_datasets), n_converged)
     return garch_datasets
+
+
+def prepare_real_datasets_signsplit(config, returns_lookup, datasets, tail_mode,
+                                    min_obs=60):
+    """Build sign-split rolling windows from existing unconditional datasets.
+
+    Parameters
+    ----------
+    config : dict
+        Must contain 'realdata' section.
+    returns_lookup : dict
+        Per-ticker dict with 'signed_returns' arrays.
+    datasets : list[dict]
+        Original unconditional rolling-window datasets.
+    tail_mode : str
+        ``"loss"`` (left tail: -r_t for r_t < 0) or ``"profit"``
+        (right tail: r_t for r_t > 0).
+    min_obs : int
+        Skip windows with fewer than this many filtered observations.
+
+    Returns
+    -------
+    list[dict]
+        Sign-filtered window datasets with positive ``"samples"``.
+    """
+    if tail_mode not in ("loss", "profit"):
+        raise ValueError(f"tail_mode must be 'loss' or 'profit', got {tail_mode!r}")
+
+    split_datasets = []
+    n_skipped = 0
+
+    for ds in datasets:
+        ticker = ds["ticker"]
+        series_end_idx = ds["series_end_idx"]
+        window_size = ds["n"]
+
+        signed_ret = returns_lookup[ticker].get("signed_returns")
+        if signed_ret is None:
+            n_skipped += 1
+            continue
+
+        window_start = series_end_idx - window_size
+        window_signed = signed_ret[window_start:series_end_idx]
+
+        if len(window_signed) != window_size:
+            n_skipped += 1
+            continue
+
+        if tail_mode == "loss":
+            mask = window_signed < 0
+            filtered = -window_signed[mask]  # flip sign → positive loss magnitudes
+        else:  # profit
+            mask = window_signed > 0
+            filtered = window_signed[mask]
+
+        if len(filtered) < min_obs:
+            n_skipped += 1
+            continue
+
+        split_ds = dict(ds)
+        split_ds["samples"] = filtered.copy()
+        split_ds["n"] = len(filtered)
+        split_ds["tail_mode"] = tail_mode
+        split_ds["dist_type"] = "real"
+        split_datasets.append(split_ds)
+
+    logger.info("Sign-split (%s): %d windows produced, %d skipped (min_obs=%d)",
+                tail_mode, len(split_datasets), n_skipped, min_obs)
+    return split_datasets
+
+
+def prepare_real_datasets_garch_signsplit(config, returns_lookup, datasets,
+                                          tail_mode, min_obs=60):
+    """Build GARCH-filtered, sign-split rolling windows.
+
+    Fits GARCH(1,1) to the full signed returns (same as unconditional GARCH),
+    then splits the standardized residuals by the sign of the original returns.
+
+    Parameters
+    ----------
+    config : dict
+        Must contain 'realdata' section with backtest_horizon.
+    returns_lookup : dict
+        Per-ticker dict with 'signed_returns' arrays.
+    datasets : list[dict]
+        Original unconditional rolling-window datasets.
+    tail_mode : str
+        ``"loss"`` or ``"profit"``.
+    min_obs : int
+        Skip windows with fewer than this many filtered observations.
+
+    Returns
+    -------
+    list[dict]
+        GARCH-filtered, sign-split window datasets.
+    """
+    from src.garch import fit_garch_and_filter
+
+    if tail_mode not in ("loss", "profit"):
+        raise ValueError(f"tail_mode must be 'loss' or 'profit', got {tail_mode!r}")
+
+    backtest_horizon = config["realdata"]["backtest_horizon"]
+    split_datasets = []
+    n_skipped = 0
+    n_converged = 0
+
+    for ds in datasets:
+        ticker = ds["ticker"]
+        series_end_idx = ds["series_end_idx"]
+        window_size = ds["n"]
+
+        signed_ret = returns_lookup[ticker].get("signed_returns")
+        if signed_ret is None:
+            n_skipped += 1
+            continue
+
+        window_start = series_end_idx - window_size
+        window_signed = signed_ret[window_start:series_end_idx]
+
+        if len(window_signed) != window_size:
+            n_skipped += 1
+            continue
+
+        garch_result = fit_garch_and_filter(window_signed,
+                                            forecast_horizon=backtest_horizon)
+
+        # Split standardized residuals by sign of original returns
+        std_resid = garch_result["std_residuals"]  # signed z_t
+        if tail_mode == "loss":
+            mask = window_signed < 0
+            filtered = np.abs(std_resid[mask])
+        else:  # profit
+            mask = window_signed > 0
+            filtered = np.abs(std_resid[mask])
+
+        if len(filtered) < min_obs:
+            n_skipped += 1
+            continue
+
+        split_ds = dict(ds)
+        split_ds["samples"] = filtered.copy()
+        split_ds["n"] = len(filtered)
+        split_ds["tail_mode"] = tail_mode
+        split_ds["garch_forecast_vol"] = garch_result["forecast_vol"]
+        split_ds["garch_converged"] = garch_result["converged"]
+        split_ds["garch_conditional_vol"] = garch_result["conditional_vol"]
+        split_ds["dist_type"] = "real"
+        split_datasets.append(split_ds)
+
+        if garch_result["converged"]:
+            n_converged += 1
+
+    logger.info("GARCH sign-split (%s): %d windows, %d converged, %d skipped",
+                tail_mode, len(split_datasets), n_converged, n_skipped)
+    return split_datasets

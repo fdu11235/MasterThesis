@@ -20,8 +20,9 @@ from joblib import Parallel, delayed
 
 from src.synthetic import generate_all
 from src.pot import process_one_dataset
-from src.features import build_dataset, build_dataset_regression
+from src.features import build_dataset, build_dataset_regression, build_var_es_curves
 from src.model import ThresholdCNN
+from src.perturbation import perturb_random_deletion, perturb_bootstrap
 from src.train import train_model, predict
 from src.evaluate import evaluate_all, plot_results
 
@@ -126,6 +127,57 @@ def main():
         test_meta = [meta[i] for i in test_idx.tolist()]
         test_diags_all = [all_diagnostics[i] for i in test_idx.tolist()]
 
+        # ── Training data augmentation via perturbation ────────────────────
+        perturb_cfg = config.get("perturbation", {})
+        augment = perturb_cfg.get("augment_training", False)
+
+        if augment:
+            aug_del_frac = perturb_cfg.get("augment_deletion_frac", 0.10)
+            aug_n_boot = perturb_cfg.get("augment_n_bootstrap", 1)
+            aug_seed = perturb_cfg.get("seed", 12345)
+
+            aug_diag_path = "outputs/data/augmented_diagnostics.pkl"
+            if not args.fresh and os.path.exists(aug_diag_path):
+                logger.info("[Augment] Loading cached augmented diagnostics from %s", aug_diag_path)
+                with open(aug_diag_path, "rb") as f:
+                    aug_diagnostics = pickle.load(f)
+            else:
+                train_datasets = [datasets[i] for i in train_idx.tolist()]
+
+                # Build perturbed copies of training data
+                perturbed = []
+                for j, ds in enumerate(train_datasets):
+                    # One deletion copy
+                    perturbed.append(
+                        perturb_random_deletion(ds, aug_del_frac, seed=aug_seed + j)
+                    )
+                    # Bootstrap copies
+                    for b in range(aug_n_boot):
+                        perturbed.append(
+                            perturb_bootstrap(ds, seed=aug_seed + len(train_datasets) + j * aug_n_boot + b)
+                        )
+
+                logger.info("[Augment] Running POT diagnostics on %d perturbed datasets …",
+                             len(perturbed))
+                pot_cfg_aug = dict(config["pot"])
+                pot_cfg_aug["decluster"] = False
+                aug_diagnostics = Parallel(n_jobs=args.n_jobs, verbose=10)(
+                    delayed(process_one_dataset)(ds, pot_cfg_aug) for ds in perturbed
+                )
+                with open(aug_diag_path, "wb") as f:
+                    pickle.dump(aug_diagnostics, f)
+                logger.info("  → %d augmented diagnostics saved to %s",
+                             len(aug_diagnostics), aug_diag_path)
+
+            # Build features from augmented data and concatenate
+            X_aug, y_aug, _ = build_dataset_regression(aug_diagnostics, config)
+            logger.info("[Augment] Augmented features: X %s, y %s", tuple(X_aug.shape), tuple(y_aug.shape))
+
+            X_train = torch.cat([X_train, X_aug], dim=0)
+            y_train = torch.cat([y_train, y_aug], dim=0)
+            logger.info("[Augment] Training set after augmentation: %d samples (was %d)",
+                         len(X_train), len(train_idx))
+
         if not args.fresh and os.path.exists(ckpt_path):
             logger.info("[Step 6] Loading cached regression model from %s", ckpt_path)
             model = ThresholdCNN(
@@ -133,6 +185,7 @@ def main():
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
+                pool_sizes=model_cfg.get("pool_sizes"),
                 task="regression",
             )
             model.load_state_dict(torch.load(ckpt_path, weights_only=True))
@@ -148,6 +201,7 @@ def main():
                 channels=model_cfg["channels"],
                 kernel_size=model_cfg["kernel_size"],
                 dropout=model_cfg["dropout"],
+                pool_sizes=model_cfg.get("pool_sizes"),
                 task="regression",
             )
             train_config = {
@@ -156,8 +210,30 @@ def main():
                 "max_epochs": model_cfg["max_epochs"],
                 "patience": model_cfg["patience"],
                 "test_fraction": config["evaluate"]["test_fraction"],
+                "loss_type": model_cfg.get("loss_type", "smooth_l1"),
+                "asymmetric_weight": model_cfg.get("asymmetric_weight", 2.0),
+                "loss_alpha": model_cfg.get("loss_alpha", 1.0),
+                "loss_beta": model_cfg.get("loss_beta", 0.5),
+                "loss_gamma": model_cfg.get("loss_gamma", 0.3),
             }
-            model, history = train_model(X_train, y_train, model, train_config, task="regression")
+
+            # Build VaR/ES curves for VaR-aware training
+            vc_train = ec_train = None
+            if train_config["loss_type"] == "var_aware":
+                logger.info("[VaR-aware] Precomputing VaR/ES curves for training data …")
+                # Need diagnostics for training set only (original + augmented)
+                train_diag_indices = train_idx.tolist()
+                train_diags_for_curves = [all_diagnostics[i] for i in train_diag_indices]
+                if augment:
+                    train_diags_for_curves.extend(aug_diagnostics)
+                L_max = X_train.shape[2]
+                vc_train, ec_train = build_var_es_curves(
+                    train_diags_for_curves, config, L_max)
+                logger.info("[VaR-aware] VaR/ES curves: %s, %s", tuple(vc_train.shape), tuple(ec_train.shape))
+
+            model, history = train_model(X_train, y_train, model, train_config,
+                                         task="regression",
+                                         var_curves=vc_train, es_curves=ec_train)
             torch.save(model.state_dict(), ckpt_path)
             logger.info("  → checkpoint saved to %s", ckpt_path)
 
@@ -257,6 +333,7 @@ def main():
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],
+                    pool_sizes=model_cfg.get("pool_sizes"),
                     n_classes=n_classes,
                 )
                 model.load_state_dict(torch.load(ckpt_path, weights_only=True))
@@ -271,6 +348,7 @@ def main():
                     channels=model_cfg["channels"],
                     kernel_size=model_cfg["kernel_size"],
                     dropout=model_cfg["dropout"],
+                    pool_sizes=model_cfg.get("pool_sizes"),
                     n_classes=n_classes,
                 )
                 train_config = {

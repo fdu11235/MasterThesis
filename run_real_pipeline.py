@@ -20,12 +20,15 @@ import torch
 import yaml
 from joblib import Parallel, delayed
 
-from src.realdata import prepare_real_datasets, prepare_real_datasets_garch
+from src.realdata import (
+    prepare_real_datasets, prepare_real_datasets_garch,
+    prepare_real_datasets_signsplit, prepare_real_datasets_garch_signsplit,
+)
 from src.pot import process_one_dataset
 from src.features import build_dataset_regression
 from src.model import ThresholdCNN
 from src.train import train_model, predict
-from src.evaluate_real import evaluate_real, plot_real_results
+from src.evaluate_real import evaluate_real, evaluate_real_signsplit, plot_real_results
 
 
 def main():
@@ -197,6 +200,7 @@ def main():
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
+            pool_sizes=model_cfg.get("pool_sizes"),
             task="regression",
         )
         model.load_state_dict(torch.load(ckpt_path, weights_only=True))
@@ -210,6 +214,7 @@ def main():
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
+            pool_sizes=model_cfg.get("pool_sizes"),
             task="regression",
         )
 
@@ -230,6 +235,8 @@ def main():
             "max_epochs": model_cfg["max_epochs"],
             "patience": model_cfg["patience"],
             "test_fraction": config["evaluate"]["test_fraction"],
+            "loss_type": model_cfg.get("loss_type", "smooth_l1"),
+            "asymmetric_weight": model_cfg.get("asymmetric_weight", 2.0),
         }
         if tl_enabled:
             train_config["freeze_backbone_epochs"] = tl_cfg.get("freeze_backbone_epochs", 0)
@@ -251,6 +258,7 @@ def main():
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
+            pool_sizes=model_cfg.get("pool_sizes"),
             task="regression",
         )
         garch_model.load_state_dict(torch.load(garch_ckpt_path, weights_only=True))
@@ -264,6 +272,7 @@ def main():
             channels=model_cfg["channels"],
             kernel_size=model_cfg["kernel_size"],
             dropout=model_cfg["dropout"],
+            pool_sizes=model_cfg.get("pool_sizes"),
             task="regression",
         )
 
@@ -284,6 +293,8 @@ def main():
             "max_epochs": model_cfg["max_epochs"],
             "patience": model_cfg["patience"],
             "test_fraction": config["evaluate"]["test_fraction"],
+            "loss_type": model_cfg.get("loss_type", "smooth_l1"),
+            "asymmetric_weight": model_cfg.get("asymmetric_weight", 2.0),
         }
         if tl_enabled:
             train_config["freeze_backbone_epochs"] = tl_cfg.get("freeze_backbone_epochs", 0)
@@ -386,6 +397,161 @@ def main():
     # Plot
     plot_real_results(results, f"{out_base}/figures/real",
                       history=history, garch_history=garch_history)
+
+    # ── Sign-split experiments (loss / profit tails) ───────────────────────
+    tail_modes = config["realdata"].get("tail_modes", ["abs"])
+    for tail_mode in tail_modes:
+        if tail_mode == "abs":
+            continue  # already done above
+
+        logger.info("=" * 60)
+        logger.info("Sign-split experiment: tail_mode=%s", tail_mode)
+        logger.info("=" * 60)
+
+        # Prepare sign-split datasets
+        ss_ds_path = f"outputs/data/real_datasets_{tail_mode}.pkl"
+        if not args.fresh and os.path.exists(ss_ds_path):
+            logger.info("[%s] Loading cached sign-split datasets from %s", tail_mode, ss_ds_path)
+            with open(ss_ds_path, "rb") as f:
+                ss_datasets = pickle.load(f)
+        else:
+            logger.info("[%s] Preparing sign-split datasets …", tail_mode)
+            ss_datasets = prepare_real_datasets_signsplit(
+                config, returns_lookup, datasets, tail_mode)
+            with open(ss_ds_path, "wb") as f:
+                pickle.dump(ss_datasets, f)
+            logger.info("  → %d windows saved to %s", len(ss_datasets), ss_ds_path)
+
+        if len(ss_datasets) == 0:
+            logger.warning("[%s] No windows produced, skipping", tail_mode)
+            continue
+
+        # POT diagnostics on sign-split data
+        ss_diag_path = f"outputs/data/real_diagnostics_{tail_mode}.pkl"
+        if not args.fresh and os.path.exists(ss_diag_path):
+            logger.info("[%s] Loading cached diagnostics from %s", tail_mode, ss_diag_path)
+            with open(ss_diag_path, "rb") as f:
+                ss_diagnostics = pickle.load(f)
+        else:
+            logger.info("[%s] Computing POT diagnostics (%d windows) …",
+                         tail_mode, len(ss_datasets))
+            pot_cfg = config["pot"]
+            ss_diagnostics = Parallel(n_jobs=args.n_jobs, verbose=10)(
+                delayed(process_one_dataset)(ds, pot_cfg) for ds in ss_datasets
+            )
+            with open(ss_diag_path, "wb") as f:
+                pickle.dump(ss_diagnostics, f)
+
+        # Build features and predict
+        ssX, ssy, ss_meta = build_dataset_regression(ss_diagnostics, config)
+        logger.info("[%s] Features: X %s", tail_mode, tuple(ssX.shape))
+
+        # Time-ordered split
+        ss_end_dates = [m.get("end_date", "") for m in ss_meta]
+        ss_sorted = np.argsort(ss_end_dates)
+        ss_n_train = int(len(ss_sorted) * train_frac)
+        ss_test_idx = ss_sorted[ss_n_train:]
+
+        ssX_test = ssX[ss_test_idx]
+        ss_test_meta = [ss_meta[i] for i in ss_test_idx]
+        ss_test_diags = [ss_diagnostics[i] for i in ss_test_idx]
+
+        # Predict using the unconditional model (transfer)
+        ss_pred_norm = predict(model, ssX_test, task="regression")
+        ss_k_pred = np.array([
+            int(np.clip(round(m["k_min"] + yp * (m["k_max"] - m["k_min"])),
+                         m["k_min"], m["k_max"]))
+            for yp, m in zip(ss_pred_norm, ss_test_meta)
+        ])
+        ss_k_baseline = np.array([diag["k_star"] for _, diag in ss_test_diags])
+        ss_test_ds = [ds for ds, _ in ss_test_diags]
+        ss_test_diag_dicts = [diag for _, diag in ss_test_diags]
+
+        # Evaluate
+        ss_results = evaluate_real_signsplit(
+            test_data=ss_test_ds,
+            diagnostics_list=ss_test_diag_dicts,
+            k_pred=ss_k_pred,
+            k_baseline=ss_k_baseline,
+            returns_lookup=returns_lookup,
+            config=config,
+            tail_mode=tail_mode,
+        )
+
+        # Save
+        ss_results_path = f"{out_base}/real_results_{tail_mode}.pkl"
+        with open(ss_results_path, "wb") as f:
+            pickle.dump(ss_results, f)
+        logger.info("[%s] Results saved to %s", tail_mode, ss_results_path)
+
+        # ── GARCH + sign-split ─────────────────────────────────────────────
+        logger.info("[%s] GARCH + sign-split …", tail_mode)
+        gss_ds_path = f"outputs/data/real_garch_datasets_{tail_mode}.pkl"
+        if not args.fresh and os.path.exists(gss_ds_path):
+            logger.info("[%s] Loading cached GARCH sign-split datasets from %s", tail_mode, gss_ds_path)
+            with open(gss_ds_path, "rb") as f:
+                gss_datasets = pickle.load(f)
+        else:
+            gss_datasets = prepare_real_datasets_garch_signsplit(
+                config, returns_lookup, datasets, tail_mode)
+            with open(gss_ds_path, "wb") as f:
+                pickle.dump(gss_datasets, f)
+
+        if len(gss_datasets) == 0:
+            logger.warning("[%s] No GARCH sign-split windows, skipping", tail_mode)
+            continue
+
+        gss_diag_path = f"outputs/data/real_garch_diagnostics_{tail_mode}.pkl"
+        if not args.fresh and os.path.exists(gss_diag_path):
+            logger.info("[%s] Loading cached GARCH sign-split diagnostics", tail_mode)
+            with open(gss_diag_path, "rb") as f:
+                gss_diagnostics = pickle.load(f)
+        else:
+            logger.info("[%s] Computing GARCH sign-split POT diagnostics (%d windows) …",
+                         tail_mode, len(gss_datasets))
+            pot_cfg = config["pot"]
+            gss_diagnostics = Parallel(n_jobs=args.n_jobs, verbose=10)(
+                delayed(process_one_dataset)(ds, pot_cfg) for ds in gss_datasets
+            )
+            with open(gss_diag_path, "wb") as f:
+                pickle.dump(gss_diagnostics, f)
+
+        gssX, gssy, gss_meta = build_dataset_regression(gss_diagnostics, config)
+        logger.info("[%s] GARCH sign-split features: X %s", tail_mode, tuple(gssX.shape))
+
+        gss_end_dates = [m.get("end_date", "") for m in gss_meta]
+        gss_sorted = np.argsort(gss_end_dates)
+        gss_n_train = int(len(gss_sorted) * train_frac)
+        gss_test_idx = gss_sorted[gss_n_train:]
+
+        gssX_test = gssX[gss_test_idx]
+        gss_test_meta = [gss_meta[i] for i in gss_test_idx]
+        gss_test_diags = [gss_diagnostics[i] for i in gss_test_idx]
+
+        gss_pred_norm = predict(garch_model, gssX_test, task="regression")
+        gss_k_pred = np.array([
+            int(np.clip(round(m["k_min"] + yp * (m["k_max"] - m["k_min"])),
+                         m["k_min"], m["k_max"]))
+            for yp, m in zip(gss_pred_norm, gss_test_meta)
+        ])
+        gss_k_baseline = np.array([diag["k_star"] for _, diag in gss_test_diags])
+        gss_test_ds = [ds for ds, _ in gss_test_diags]
+        gss_test_diag_dicts = [diag for _, diag in gss_test_diags]
+
+        gss_results = evaluate_real_signsplit(
+            test_data=gss_test_ds,
+            diagnostics_list=gss_test_diag_dicts,
+            k_pred=gss_k_pred,
+            k_baseline=gss_k_baseline,
+            returns_lookup=returns_lookup,
+            config=config,
+            tail_mode=tail_mode,
+        )
+
+        gss_results_path = f"{out_base}/real_results_garch_{tail_mode}.pkl"
+        with open(gss_results_path, "wb") as f:
+            pickle.dump(gss_results, f)
+        logger.info("[%s] GARCH sign-split results saved to %s", tail_mode, gss_results_path)
 
     logger.info("Real-data pipeline complete.")
 

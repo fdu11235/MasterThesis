@@ -56,6 +56,85 @@ def var_backtest(sorted_desc, k, xi, beta, n, p, future_returns):
     }
 
 
+def var_backtest_signsplit(sorted_desc, k, xi, beta, n, p,
+                          future_signed, tail_mode, forecast_vol=None):
+    """Compute VaR from GPD fit and count violations for a specific tail.
+
+    Only future returns matching the requested sign are considered.
+    When *forecast_vol* is given (GARCH path), VaR/ES on standardised
+    residuals are scaled back to return units via ``sigma_t * VaR_z``.
+
+    Parameters
+    ----------
+    sorted_desc : ndarray
+        Window samples sorted descending (positive, sign-filtered).
+    k : int
+        Number of exceedances.
+    xi, beta : float
+        GPD shape and scale parameters.
+    n : int
+        Sample size of the sign-filtered window.
+    p : float
+        Quantile probability (e.g. 0.99).
+    future_signed : ndarray
+        Signed log-returns in the backtest horizon.
+    tail_mode : str
+        ``"loss"`` or ``"profit"``.
+    forecast_vol : ndarray or None
+        GARCH-forecasted sigma for each future day. If given, VaR/ES are
+        multiplied by forecast_vol to convert from z-score to return units.
+
+    Returns
+    -------
+    dict with var_estimate, es_estimate, n_violations, violation_rate,
+    n_future (count of same-sign future days).
+    """
+    var_z = pot_quantile(sorted_desc, k, xi, beta, n, p)
+    es_z = pot_es(sorted_desc, k, xi, beta, n, p)
+
+    if tail_mode == "loss":
+        mask = future_signed < 0
+        future_magnitudes = np.abs(future_signed[mask])
+    else:  # profit
+        mask = future_signed > 0
+        future_magnitudes = future_signed[mask]
+
+    if forecast_vol is not None:
+        horizon = min(len(future_signed), len(forecast_vol))
+        fvol = forecast_vol[:horizon]
+        # Scale z-score VaR/ES by per-day forecast volatility,
+        # then filter to same-sign days
+        fvol_filtered = fvol[mask[:horizon]]
+        var_per_day = fvol_filtered * var_z
+        es_per_day = fvol_filtered * es_z
+        var_est = float(np.mean(var_per_day)) if len(var_per_day) > 0 else var_z
+        es_est = float(np.mean(es_per_day)) if len(es_per_day) > 0 else es_z
+    else:
+        var_per_day = None
+        var_est = var_z
+        es_est = es_z
+
+    n_future = len(future_magnitudes)
+    if n_future > 0:
+        if var_per_day is not None:
+            violations = future_magnitudes[:len(var_per_day)] > var_per_day
+        else:
+            violations = future_magnitudes > var_est
+        n_violations = int(violations.sum())
+        violation_rate = n_violations / n_future
+    else:
+        n_violations = 0
+        violation_rate = float("nan")
+
+    return {
+        "var_estimate": var_est,
+        "es_estimate": es_est,
+        "n_violations": n_violations,
+        "violation_rate": violation_rate,
+        "n_future": n_future,
+    }
+
+
 def kupiec_test(violation_rate, n, p):
     """Kupiec (1995) proportion-of-failures (POF) test.
 
@@ -649,6 +728,185 @@ def plot_multi_level_coverage(results, save_dir):
     fig.tight_layout()
     fig.savefig(os.path.join(save_dir, "multi_level_coverage.png"), dpi=150)
     plt.close(fig)
+
+
+def evaluate_real_signsplit(test_data, diagnostics_list, k_pred, k_baseline,
+                           returns_lookup, config, tail_mode):
+    """VaR backtesting for sign-split (loss or profit) tails.
+
+    Parameters
+    ----------
+    test_data : list[dict]
+        Sign-split test-set window dicts (with ticker, series_end_idx, tail_mode).
+    diagnostics_list : list[dict]
+        Corresponding diagnostics dicts.
+    k_pred : ndarray
+        CNN-predicted k values.
+    k_baseline : ndarray
+        Baseline k* values from scoring function.
+    returns_lookup : dict
+        Per-ticker dict with 'signed_returns' array.
+    config : dict
+        Must have 'realdata.backtest_horizon' and 'evaluate.quantile_p'.
+    tail_mode : str
+        ``"loss"`` or ``"profit"``.
+
+    Returns
+    -------
+    dict with per-method violation rates and details.
+    """
+    backtest_horizon = config["realdata"]["backtest_horizon"]
+    p = config["evaluate"]["quantile_p"]
+
+    methods = {
+        "cnn": k_pred,
+        "baseline_k_star": k_baseline,
+    }
+
+    sqrt_k = np.array([int(np.sqrt(ds["n"])) for ds in test_data])
+    methods["fixed_sqrt_n"] = sqrt_k
+
+    def _empty_bucket():
+        return {"violations": [], "var_estimates": [], "es_estimates": [],
+                "n_future_list": [], "tickers": [],
+                "violations_binary": [], "future_returns_all": [],
+                "var_all": [], "es_all": []}
+
+    results = {m: _empty_bucket() for m in methods}
+    results["historical_sim"] = _empty_bucket()
+    n_skipped = 0
+
+    for i, (ds, diag) in enumerate(zip(test_data, diagnostics_list)):
+        ticker = ds["ticker"]
+        series_end_idx = ds.get("series_end_idx", 0)
+        signed_returns = returns_lookup[ticker].get("signed_returns")
+
+        if signed_returns is None:
+            n_skipped += 1
+            continue
+
+        future_start = series_end_idx
+        future_end = series_end_idx + backtest_horizon
+        if future_end > len(signed_returns):
+            n_skipped += 1
+            continue
+
+        future_signed = signed_returns[future_start:future_end]
+
+        # Extract future magnitudes for this tail
+        if tail_mode == "loss":
+            sign_mask = future_signed < 0
+            future_mags = np.abs(future_signed[sign_mask])
+        else:
+            sign_mask = future_signed > 0
+            future_mags = future_signed[sign_mask]
+
+        sorted_desc = np.sort(ds["samples"])[::-1]
+        n = ds["n"]
+
+        for method_name, k_values in methods.items():
+            k = int(k_values[i])
+            _, xi, beta = _get_k_and_params(diag, k)
+
+            if np.isnan(xi) or np.isnan(beta):
+                continue
+
+            fvol = ds.get("garch_forecast_vol")
+            bt = var_backtest_signsplit(sorted_desc, k, xi, beta, n, p,
+                                        future_signed, tail_mode,
+                                        forecast_vol=fvol)
+            results[method_name]["violations"].append(bt["violation_rate"])
+            results[method_name]["var_estimates"].append(bt["var_estimate"])
+            results[method_name]["es_estimates"].append(bt["es_estimate"])
+            results[method_name]["n_future_list"].append(bt["n_future"])
+            results[method_name]["tickers"].append(ticker)
+            if len(future_mags) > 0:
+                viol_binary = (future_mags > bt["var_estimate"]).astype(int)
+                results[method_name]["violations_binary"].extend(viol_binary.tolist())
+                results[method_name]["future_returns_all"].extend(future_mags.tolist())
+                results[method_name]["var_all"].extend(
+                    [bt["var_estimate"]] * len(future_mags))
+                results[method_name]["es_all"].extend(
+                    [bt["es_estimate"]] * len(future_mags))
+
+        # Historical simulation
+        hist_var = np.quantile(ds["samples"], p)
+        samples_above = ds["samples"][ds["samples"] > hist_var]
+        hist_es = float(samples_above.mean()) if len(samples_above) > 0 else hist_var
+
+        if len(future_mags) > 0:
+            hist_vr = (future_mags > hist_var).sum() / len(future_mags)
+            hist_viol_binary = (future_mags > hist_var).astype(int)
+            results["historical_sim"]["violations_binary"].extend(hist_viol_binary.tolist())
+            results["historical_sim"]["future_returns_all"].extend(future_mags.tolist())
+            results["historical_sim"]["var_all"].extend([hist_var] * len(future_mags))
+            results["historical_sim"]["es_all"].extend([hist_es] * len(future_mags))
+        else:
+            hist_vr = float("nan")
+        results["historical_sim"]["violations"].append(hist_vr)
+        results["historical_sim"]["var_estimates"].append(hist_var)
+        results["historical_sim"]["es_estimates"].append(hist_es)
+        results["historical_sim"]["n_future_list"].append(len(future_mags))
+        results["historical_sim"]["tickers"].append(ticker)
+
+    # Summary statistics with full statistical tests
+    summary = {}
+    expected_rate = 1 - p
+    for method_name, data in results.items():
+        vr_arr = np.array([v for v in data["violations"] if not np.isnan(v)])
+        if len(vr_arr) == 0:
+            summary[method_name] = {"mean_violation_rate": float("nan"), "n_windows": 0}
+            continue
+
+        mean_vr = float(vr_arr.mean())
+        total_violations = sum(
+            round(vr * nf) for vr, nf in zip(data["violations"], data["n_future_list"])
+            if not np.isnan(vr)
+        )
+        total_obs = sum(nf for vr, nf in zip(data["violations"], data["n_future_list"])
+                        if not np.isnan(vr))
+        overall_vr = total_violations / total_obs if total_obs > 0 else float("nan")
+
+        kup = kupiec_test(overall_vr, total_obs, p)
+        chris = christoffersen_test(data["violations_binary"])
+
+        es_arr = np.array(data["es_estimates"])
+        mean_es = float(es_arr.mean()) if len(es_arr) > 0 else float("nan")
+
+        mf = mcneil_frey_test(
+            np.array(data["future_returns_all"]),
+            np.array(data["var_all"]),
+            np.array(data["es_all"]),
+        ) if data["future_returns_all"] else {
+            "t_stat": float("nan"), "p_value": float("nan"),
+            "reject_5pct": False, "n_violations": 0,
+        }
+
+        summary[method_name] = {
+            "mean_violation_rate": mean_vr,
+            "overall_violation_rate": overall_vr,
+            "expected_rate": expected_rate,
+            "n_windows": len(vr_arr),
+            "mean_var": float(np.nanmean(data["var_estimates"])) if data["var_estimates"] else float("nan"),
+            "kupiec": kup,
+            "christoffersen": chris,
+            "mean_es_estimate": mean_es,
+            "mcneil_frey": mf,
+        }
+
+    logger.info("Sign-split (%s) backtesting: %d windows evaluated, %d skipped",
+                tail_mode, len(test_data) - n_skipped, n_skipped)
+    for method, s in summary.items():
+        kup = s.get("kupiec", {})
+        mf = s.get("mcneil_frey", {})
+        logger.info("  %-20s: VR=%.4f, mean_VaR=%.4f, Kupiec reject=%s, MF reject=%s (p=%.4f)",
+                     method, s.get("overall_violation_rate", float("nan")),
+                     s.get("mean_var", float("nan")),
+                     kup.get("reject_5pct", "N/A"),
+                     mf.get("reject_5pct", "N/A"),
+                     mf.get("p_value", float("nan")))
+
+    return {"methods": results, "summary": summary, "tail_mode": tail_mode}
 
 
 def plot_real_results(results, save_dir, history=None, garch_history=None):

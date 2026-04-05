@@ -231,16 +231,16 @@ def compute_baseline_k_star(
     sorted_desc: NDArray,
     k_grid: NDArray,
     delta: int,
-    weights: tuple[float, float, float],
+    weights: tuple,
 ) -> tuple[int, dict]:
-    """Combine stability, GoF, and penalty scores to select k*.
+    """Combine stability, GoF, penalty, and (optionally) mean-excess scores to select k*.
 
     Parameters
     ----------
     sorted_desc : array, sample sorted in descending order
     k_grid : candidate k values
     delta : half-window size for stability scoring
-    weights : (w_stability, w_gof, w_penalty)
+    weights : (w_stability, w_gof, w_penalty) or (w_stability, w_gof, w_penalty, w_mean_excess)
 
     Returns
     -------
@@ -260,9 +260,11 @@ def compute_baseline_k_star(
     s_stab_n = _min_max_normalize(s_stab)
     s_gof_n = _min_max_normalize(s_gof)
     s_pen_n = _min_max_normalize(s_pen)
+    s_me_n = _min_max_normalize(s_me)
 
-    w_stab, w_gof, w_pen = weights
-    total = w_stab * s_stab_n + w_gof * s_gof_n + w_pen * s_pen_n
+    w_stab, w_gof, w_pen = weights[0], weights[1], weights[2]
+    w_me = weights[3] if len(weights) > 3 else 0.0
+    total = w_stab * s_stab_n + w_gof * s_gof_n + w_pen * s_pen_n + w_me * s_me_n
 
     idx = int(np.argmin(total))
     k_star = int(k_grid[idx])
