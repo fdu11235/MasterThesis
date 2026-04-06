@@ -13,7 +13,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.stats import chi2, ttest_1samp
 
-from src.evaluate import pot_quantile, pot_es
+from src.evaluate import pot_quantile, pot_es, pot_es_stable
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def var_backtest(sorted_desc, k, xi, beta, n, p, future_returns):
     dict with var_estimate, n_violations, violation_rate, n_future.
     """
     var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
-    es_est = pot_es(sorted_desc, k, xi, beta, n, p)
+    es_est = pot_es_stable(sorted_desc, k, xi, beta, n, p)
     violations = future_returns > var_est
     n_violations = int(violations.sum())
     n_future = len(future_returns)
@@ -90,7 +90,7 @@ def var_backtest_signsplit(sorted_desc, k, xi, beta, n, p,
     n_future (count of same-sign future days).
     """
     var_z = pot_quantile(sorted_desc, k, xi, beta, n, p)
-    es_z = pot_es(sorted_desc, k, xi, beta, n, p)
+    es_z = pot_es_stable(sorted_desc, k, xi, beta, n, p)
 
     if tail_mode == "loss":
         mask = future_signed < 0
@@ -319,7 +319,7 @@ def var_backtest_garch(sorted_desc, k, xi, beta, n, p, future_returns, forecast_
     n_violations, violation_rate, n_future, violations_binary.
     """
     var_z = pot_quantile(sorted_desc, k, xi, beta, n, p)
-    es_z = pot_es(sorted_desc, k, xi, beta, n, p)
+    es_z = pot_es_stable(sorted_desc, k, xi, beta, n, p)
 
     # Truncate forecast_vol to match future_returns length
     horizon = min(len(future_returns), len(forecast_vol))

@@ -89,6 +89,37 @@ def pot_es(sorted_desc, k, xi, beta, n, p):
     return (var_est + beta - xi * u) / one_minus_xi
 
 
+def pot_es_stable(sorted_desc, k, xi, beta, n, p):
+    """Expected Shortfall with semi-parametric fallback for high xi.
+
+    When xi > 0.7, the closed-form ES formula has 1/(1-xi) which amplifies
+    errors dramatically. Falls back to the empirical mean of observations
+    exceeding VaR (a legitimate Hill-type ES estimator).
+    """
+    var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
+    if xi <= 0.7:
+        return pot_es(sorted_desc, k, xi, beta, n, p)
+    # Semi-parametric: mean of observations exceeding VaR
+    tail = sorted_desc[sorted_desc > var_est]
+    if len(tail) >= 2:
+        return float(tail.mean())
+    return var_est + beta  # exponential tail fallback
+
+
+def _resolve_garch_type(dist_type, dist_params):
+    """Map GARCH-wrapped types to their base distribution for true quantile/ES.
+
+    GARCH standardised residuals have the same theoretical tail as the base
+    innovation distribution, so we delegate to the base type.
+    """
+    if dist_type.startswith('garch_'):
+        base_type = dist_type[len('garch_'):]
+        base_params = {k: v for k, v in dist_params.items()
+                       if k not in ('garch_omega', 'garch_alpha', 'garch_beta')}
+        return base_type, base_params
+    return dist_type, dist_params
+
+
 def true_quantile(dist_type, dist_params, p):
     """Analytical quantile from known distribution parameters.
 
@@ -99,6 +130,7 @@ def true_quantile(dist_type, dist_params, p):
     Returns:
         float true quantile
     """
+    dist_type, dist_params = _resolve_garch_type(dist_type, dist_params)
     if dist_type == 'student_t':
         return abs(stats.t.ppf(p, df=dist_params['df']))
     elif dist_type == 'pareto':
@@ -127,6 +159,7 @@ def true_quantile(dist_type, dist_params, p):
 
 def _mc_es(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
     """Monte Carlo Expected Shortfall: E[X | X > VaR(p)]."""
+    dist_type, dist_params = _resolve_garch_type(dist_type, dist_params)
     rng = np.random.RandomState(seed)
     generators = {
         'student_t': lambda: np.abs(stats.t.rvs(df=dist_params['df'], size=n_mc, random_state=rng)),
@@ -201,7 +234,7 @@ def evaluate_all(test_data, k_pred, k_true, config):
         n = ds['n']
         q_est.append(pot_quantile(sorted_desc, k, xi, beta, n, p))
         q_true.append(true_quantile(ds['dist_type'], ds['params'], p))
-        es_est_list.append(pot_es(sorted_desc, k, xi, beta, n, p))
+        es_est_list.append(pot_es_stable(sorted_desc, k, xi, beta, n, p))
         es_true_list.append(true_es(ds['dist_type'], ds['params'], p))
         dist_types.append(ds['dist_type'])
         dist_params.append(ds['params'])

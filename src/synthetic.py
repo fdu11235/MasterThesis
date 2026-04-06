@@ -195,6 +195,77 @@ def _generate_gamma_pareto_splice(
 
 
 # ---------------------------------------------------------------------------
+# GARCH-wrapped generator
+# ---------------------------------------------------------------------------
+
+def _generate_garch_wrapped(
+    rng: np.random.RandomState,
+    n: int,
+    base_dist_type: str,
+    base_params: dict[str, Any],
+    garch_omega: float = 0.01,
+    garch_alpha: float = 0.10,
+    garch_beta: float = 0.85,
+) -> np.ndarray:
+    """Generate GARCH-filtered absolute standardised residuals.
+
+    1. Draw i.i.d. innovations from *base_dist_type*.
+    2. Simulate a GARCH(1,1) return series  r_t = sigma_t * z_t.
+    3. Fit GARCH(1,1) to recover estimated residuals  z_hat_t = r_t / sigma_hat_t.
+    4. Return |z_hat_t|.
+
+    This produces training data whose diagnostic curves (xi, AD, mean excess)
+    exhibit the same noise characteristics as real data processed through the
+    GARCH-POT pipeline.
+    """
+    from src.garch import fit_garch_and_filter
+
+    # Need extra samples for burn-in; generate 20% more, then trim
+    n_gen = n + max(200, n // 5)
+
+    # Step 1: i.i.d. innovations from base distribution
+    base_generators = {
+        "student_t": _generate_student_t,
+        "pareto": _generate_pareto,
+    }
+    if base_dist_type not in base_generators:
+        raise ValueError(
+            f"GARCH wrapper only supports base distributions: "
+            f"{list(base_generators)}, got {base_dist_type!r}"
+        )
+
+    # Generate raw innovations (positive); convert to signed for GARCH
+    raw = base_generators[base_dist_type](rng, n_gen, **base_params)
+    # Assign random signs so GARCH sees realistic signed returns
+    signs = rng.choice([-1.0, 1.0], size=n_gen)
+    innovations = raw * signs
+
+    # Standardize innovations to unit variance (GARCH assumes E[z^2] = 1)
+    innovations = innovations / (np.std(innovations) + 1e-10)
+
+    # Step 2: simulate GARCH(1,1) returns
+    sigma2 = np.empty(n_gen)
+    returns = np.empty(n_gen)
+    sigma2[0] = garch_omega / (1.0 - garch_alpha - garch_beta)  # unconditional var
+    returns[0] = np.sqrt(sigma2[0]) * innovations[0]
+
+    for t in range(1, n_gen):
+        sigma2[t] = (garch_omega
+                     + garch_alpha * returns[t - 1] ** 2
+                     + garch_beta * sigma2[t - 1])
+        returns[t] = np.sqrt(sigma2[t]) * innovations[t]
+
+    # Trim burn-in
+    returns = returns[-n:]
+
+    # Step 3: fit GARCH to recover standardized residuals
+    result = fit_garch_and_filter(returns, forecast_horizon=1)
+
+    # Step 4: return absolute standardized residuals
+    return result['abs_std_residuals']
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -241,6 +312,22 @@ def generate_dataset(
         "log_gamma": lambda: _generate_log_gamma(rng, n, **dist_params),
         "gamma_pareto_splice": lambda: _generate_gamma_pareto_splice(
             rng, n, **dist_params
+        ),
+        "garch_student_t": lambda: _generate_garch_wrapped(
+            rng, n, "student_t",
+            {k: v for k, v in dist_params.items()
+             if k not in ("garch_omega", "garch_alpha", "garch_beta")},
+            garch_omega=dist_params.get("garch_omega", 0.01),
+            garch_alpha=dist_params.get("garch_alpha", 0.10),
+            garch_beta=dist_params.get("garch_beta", 0.85),
+        ),
+        "garch_pareto": lambda: _generate_garch_wrapped(
+            rng, n, "pareto",
+            {k: v for k, v in dist_params.items()
+             if k not in ("garch_omega", "garch_alpha", "garch_beta")},
+            garch_omega=dist_params.get("garch_omega", 0.01),
+            garch_alpha=dist_params.get("garch_alpha", 0.10),
+            garch_beta=dist_params.get("garch_beta", 0.85),
         ),
     }
 
@@ -325,6 +412,24 @@ def _param_combos(dist_type: str, dist_cfg: dict) -> list[dict[str, Any]]:
             for gs, pa in itertools.product(
                 dist_cfg["gamma_shape"], dist_cfg["pareto_alpha"]
             )
+        ]
+
+    if dist_type == "garch_student_t":
+        ga = dist_cfg.get("garch_alpha", 0.1)
+        gb = dist_cfg.get("garch_beta", 0.85)
+        go = dist_cfg.get("garch_omega", 0.01)
+        return [
+            {"df": df, "garch_alpha": ga, "garch_beta": gb, "garch_omega": go}
+            for df in dist_cfg["df"]
+        ]
+
+    if dist_type == "garch_pareto":
+        ga = dist_cfg.get("garch_alpha", 0.1)
+        gb = dist_cfg.get("garch_beta", 0.85)
+        go = dist_cfg.get("garch_omega", 0.01)
+        return [
+            {"alpha": a, "garch_alpha": ga, "garch_beta": gb, "garch_omega": go}
+            for a in dist_cfg["alpha"]
         ]
 
     raise ValueError(f"Unknown dist_type {dist_type!r}")

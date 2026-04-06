@@ -67,6 +67,35 @@ class TestNewDistributions:
         np.testing.assert_array_equal(a["samples"], b["samples"])
 
 
+class TestGarchWrapped:
+    """Tests for GARCH-wrapped distribution generators."""
+
+    @pytest.mark.parametrize("dist_type,params", [
+        ("garch_student_t", {"df": 3, "garch_alpha": 0.1, "garch_beta": 0.85, "garch_omega": 0.01}),
+        ("garch_pareto", {"alpha": 2.0, "garch_alpha": 0.1, "garch_beta": 0.85, "garch_omega": 0.01}),
+    ])
+    def test_output_shape_and_positive(self, dist_type, params):
+        result = generate_dataset(dist_type, params, n=500, seed=42)
+        assert result["samples"].shape == (500,)
+        assert np.all(result["samples"] >= 0), "GARCH abs residuals must be non-negative"
+
+    @pytest.mark.parametrize("dist_type,params", [
+        ("garch_student_t", {"df": 4, "garch_alpha": 0.1, "garch_beta": 0.85, "garch_omega": 0.01}),
+        ("garch_pareto", {"alpha": 1.5, "garch_alpha": 0.1, "garch_beta": 0.85, "garch_omega": 0.01}),
+    ])
+    def test_garch_filtering_produces_different_data(self, dist_type, params):
+        """GARCH-filtered data should differ from plain i.i.d. data."""
+        garch_result = generate_dataset(dist_type, params, n=1000, seed=42)
+        # Compare with the base distribution (same seed won't match due to GARCH)
+        base_type = dist_type.replace("garch_", "")
+        base_params = {k: v for k, v in params.items()
+                       if k not in ("garch_alpha", "garch_beta", "garch_omega")}
+        base_result = generate_dataset(base_type, base_params, n=1000, seed=42)
+        # Shapes match but values should differ
+        assert garch_result["samples"].shape == base_result["samples"].shape
+        assert not np.allclose(garch_result["samples"], base_result["samples"])
+
+
 class TestGenerateAll:
     """Tests for generate_all."""
 

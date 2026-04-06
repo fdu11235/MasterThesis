@@ -41,6 +41,16 @@ synthetic:
       gamma_shape: [2, 3]
       pareto_alpha: [1.5, 2.0]
       splice_quantile: 0.9
+    garch_student_t:
+      df: [3, 4, 5]
+      garch_alpha: 0.1
+      garch_beta: 0.85
+      garch_omega: 0.01
+    garch_pareto:
+      alpha: [1.5, 2.0, 3.0]
+      garch_alpha: 0.1
+      garch_beta: 0.85
+      garch_omega: 0.01
 
 pot:
   k_min: 30
