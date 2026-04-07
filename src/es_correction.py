@@ -31,7 +31,9 @@ _DEFAULTS = {
     "val_fraction": 0.2,
     "seed": 42,
     "correction_clip": [0.1, 5.0],
-    "output_floor": 0.5,
+    "output_lo": 0.5,
+    "output_hi": 3.0,
+    "output_mode": "softplus",
     "nan_replace": 20.0,
     "amplification_clamp": 0.05,
 }
@@ -45,22 +47,42 @@ def _cfg(config, key):
 
 
 class ESCorrectionNet(nn.Module):
-    """Small MLP that predicts ES correction factor from scalar features."""
+    """Small MLP that predicts ES correction factor from scalar features.
 
-    def __init__(self, in_features=9, hidden=32, output_floor=0.5):
+    Supports two output modes (configured via output_mode):
+    - "sigmoid": bounded output in [output_lo, output_hi] via sigmoid
+    - "softplus": Softplus + output_lo floor (original approach)
+    """
+
+    def __init__(self, in_features=9, hidden=32, output_lo=0.5, output_hi=3.0,
+                 output_mode="sigmoid"):
         super().__init__()
-        self.output_floor = output_floor
-        self.net = nn.Sequential(
-            nn.Linear(in_features, hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, hidden // 2),
-            nn.ReLU(),
-            nn.Linear(hidden // 2, 1),
-            nn.Softplus(),
-        )
+        self.output_lo = output_lo
+        self.output_hi = output_hi
+        self.output_mode = output_mode
+
+        if output_mode == "sigmoid":
+            self.net = nn.Sequential(
+                nn.Linear(in_features, hidden),
+                nn.ReLU(),
+                nn.Linear(hidden, hidden // 2),
+                nn.ReLU(),
+                nn.Linear(hidden // 2, 1),
+            )
+        else:  # softplus
+            self.net = nn.Sequential(
+                nn.Linear(in_features, hidden),
+                nn.ReLU(),
+                nn.Linear(hidden, hidden // 2),
+                nn.ReLU(),
+                nn.Linear(hidden // 2, 1),
+                nn.Softplus(),
+            )
 
     def forward(self, x):
-        return self.net(x) + self.output_floor
+        if self.output_mode == "sigmoid":
+            return self.output_lo + (self.output_hi - self.output_lo) * torch.sigmoid(self.net(x))
+        return self.net(x) + self.output_lo
 
 
 def extract_features(ds, diag, k, p=0.99, config=None):
@@ -201,8 +223,6 @@ def train_correction_net(X, y, config=None):
     patience = _cfg(config, "patience")
     val_frac = _cfg(config, "val_fraction")
     seed = _cfg(config, "seed")
-    output_floor = _cfg(config, "output_floor")
-
     n = len(X)
     perm = np.random.RandomState(seed).permutation(n)
     val_size = int(n * val_frac)
@@ -218,8 +238,12 @@ def train_correction_net(X, y, config=None):
     X_val = torch.tensor(X_norm[val_idx], dtype=torch.float32)
     y_val = torch.tensor(y[val_idx], dtype=torch.float32)
 
+    output_lo = _cfg(config, "output_lo")
+    output_hi = _cfg(config, "output_hi")
+    output_mode = _cfg(config, "output_mode")
     model = ESCorrectionNet(in_features=X.shape[1], hidden=hidden,
-                            output_floor=output_floor)
+                            output_lo=output_lo, output_hi=output_hi,
+                            output_mode=output_mode)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.SmoothL1Loss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(

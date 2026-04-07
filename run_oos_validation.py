@@ -67,7 +67,14 @@ def main():
 
     logger.info("Loading ES correction network...")
     ckpt = torch.load('outputs/checkpoints/es_correction_net.pt', weights_only=False)
-    corr_net = ESCorrectionNet(in_features=9)
+    es_cfg = config.get('es_correction', {})
+    corr_net = ESCorrectionNet(
+        in_features=9,
+        hidden=es_cfg.get('hidden', 32),
+        output_lo=es_cfg.get('output_lo', 0.5),
+        output_hi=es_cfg.get('output_hi', 3.0),
+        output_mode=es_cfg.get('output_mode', 'softplus'),
+    )
     corr_net.load_state_dict(ckpt['state_dict'])
     corr_net.X_mean = ckpt['X_mean']
     corr_net.X_std = ckpt['X_std']

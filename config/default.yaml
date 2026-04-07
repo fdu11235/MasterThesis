@@ -109,7 +109,9 @@ es_correction:
   val_fraction: 0.2
   seed: 42
   correction_clip: [0.1, 5.0]    # min/max correction factor during training
-  output_floor: 0.5              # minimum correction factor at inference
+  output_lo: 0.5                 # lower bound for correction factor
+  output_hi: 3.0                 # upper bound (sigmoid mode only)
+  output_mode: "softplus"        # "softplus" (floor) or "sigmoid" (bounded)
   nan_replace: 20.0              # replacement for NaN/Inf in features
   amplification_clamp: 0.05      # min value for (1-xi) denominator
 
