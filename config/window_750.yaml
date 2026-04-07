@@ -111,7 +111,7 @@ realdata:
   tickers: ["^NYFANG", "AAPL", "MSFT", "NVDA", "AMZN", "META", "BTC-USD", "ETH-USD"]
   start: "1960-01-01"
   end: "2025-12-31"
-  window_size: 1000
+  window_size: 750
   step_size: 5
   backtest_horizon: 5
   train_fraction: 0.8
