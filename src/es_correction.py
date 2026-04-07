@@ -21,12 +21,35 @@ from src.evaluate import pot_quantile, pot_es, true_es
 
 logger = logging.getLogger(__name__)
 
+# Defaults used when no config is provided
+_DEFAULTS = {
+    "hidden": 32,
+    "lr": 0.001,
+    "batch_size": 64,
+    "max_epochs": 200,
+    "patience": 20,
+    "val_fraction": 0.2,
+    "seed": 42,
+    "correction_clip": [0.1, 5.0],
+    "output_floor": 0.5,
+    "nan_replace": 20.0,
+    "amplification_clamp": 0.05,
+}
+
+
+def _cfg(config, key):
+    """Get ES correction config value with fallback to defaults."""
+    if config is None:
+        return _DEFAULTS[key]
+    return config.get("es_correction", {}).get(key, _DEFAULTS[key])
+
 
 class ESCorrectionNet(nn.Module):
     """Small MLP that predicts ES correction factor from scalar features."""
 
-    def __init__(self, in_features=9, hidden=32):
+    def __init__(self, in_features=9, hidden=32, output_floor=0.5):
         super().__init__()
+        self.output_floor = output_floor
         self.net = nn.Sequential(
             nn.Linear(in_features, hidden),
             nn.ReLU(),
@@ -37,11 +60,10 @@ class ESCorrectionNet(nn.Module):
         )
 
     def forward(self, x):
-        # Output > 0.5: correction factor can reduce ES by at most half
-        return self.net(x) + 0.5
+        return self.net(x) + self.output_floor
 
 
-def extract_features(ds, diag, k, p=0.99):
+def extract_features(ds, diag, k, p=0.99, config=None):
     """Extract 9 scalar features for the ES correction network.
 
     Parameters
@@ -55,11 +77,16 @@ def extract_features(ds, diag, k, p=0.99):
         Predicted k value.
     p : float
         Quantile probability.
+    config : dict or None
+        Full config dict. Uses es_correction section for thresholds.
 
     Returns
     -------
     ndarray of shape (9,) or None if extraction fails.
     """
+    nan_replace = _cfg(config, "nan_replace")
+    amp_clamp = _cfg(config, "amplification_clamp")
+
     k_grid = np.asarray(diag['k_grid'])
     k_idx = min(np.searchsorted(k_grid, k), len(diag['params']) - 1)
     xi, beta = diag['params'][k_idx]
@@ -79,7 +106,7 @@ def extract_features(ds, diag, k, p=0.99):
     me_at_k = diag['mean_excess_values'][k_idx] if k_idx < len(diag['mean_excess_values']) else 0.0
 
     kurtosis = float(sp_stats.kurtosis(samples))
-    amplification = 1.0 / max(1.0 - xi, 0.05)
+    amplification = 1.0 / max(1.0 - xi, amp_clamp)
 
     features = np.array([
         xi,                                          # 0: tail index
@@ -93,8 +120,7 @@ def extract_features(ds, diag, k, p=0.99):
         amplification,                               # 8: 1/(1-xi)
     ], dtype=np.float64)
 
-    # Replace NaN/Inf
-    features = np.nan_to_num(features, nan=0.0, posinf=20.0, neginf=-20.0)
+    features = np.nan_to_num(features, nan=0.0, posinf=nan_replace, neginf=-nan_replace)
     return features
 
 
@@ -113,13 +139,14 @@ def build_correction_dataset(all_diagnostics, k_pred, config):
     y : ndarray (N,) — correction factors (ES_true / ES_est)
     """
     p = config.get('evaluate', {}).get('quantile_p', 0.99)
+    clip_lo, clip_hi = _cfg(config, "correction_clip")
 
     X_list = []
     y_list = []
 
     for i, (ds, diag) in enumerate(all_diagnostics):
         k = int(k_pred[i])
-        feats = extract_features(ds, diag, k, p)
+        feats = extract_features(ds, diag, k, p, config)
         if feats is None:
             continue
 
@@ -138,9 +165,7 @@ def build_correction_dataset(all_diagnostics, k_pred, config):
         if es_true <= 0 or es_est <= 0 or np.isnan(es_est):
             continue
 
-        correction = es_true / es_est
-        # Clip extreme corrections to avoid training instability
-        correction = np.clip(correction, 0.1, 5.0)
+        correction = np.clip(es_true / es_est, clip_lo, clip_hi)
 
         X_list.append(feats)
         y_list.append(correction)
@@ -154,16 +179,32 @@ def build_correction_dataset(all_diagnostics, k_pred, config):
     return X, y
 
 
-def train_correction_net(X, y, config=None, val_frac=0.2, max_epochs=200, patience=20):
+def train_correction_net(X, y, config=None):
     """Train the ES correction network.
+
+    Parameters
+    ----------
+    X : ndarray (N, F)
+    y : ndarray (N,)
+    config : dict or None
+        Full config dict. Uses es_correction section for hyperparameters.
 
     Returns
     -------
     model : ESCorrectionNet (on CPU, best weights loaded)
     history : dict with train_loss, val_loss
     """
+    hidden = _cfg(config, "hidden")
+    lr = _cfg(config, "lr")
+    batch_size = _cfg(config, "batch_size")
+    max_epochs = _cfg(config, "max_epochs")
+    patience = _cfg(config, "patience")
+    val_frac = _cfg(config, "val_fraction")
+    seed = _cfg(config, "seed")
+    output_floor = _cfg(config, "output_floor")
+
     n = len(X)
-    perm = np.random.RandomState(42).permutation(n)
+    perm = np.random.RandomState(seed).permutation(n)
     val_size = int(n * val_frac)
     val_idx, train_idx = perm[:val_size], perm[val_size:]
 
@@ -177,17 +218,20 @@ def train_correction_net(X, y, config=None, val_frac=0.2, max_epochs=200, patien
     X_val = torch.tensor(X_norm[val_idx], dtype=torch.float32)
     y_val = torch.tensor(y[val_idx], dtype=torch.float32)
 
-    model = ESCorrectionNet(in_features=X.shape[1])
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    model = ESCorrectionNet(in_features=X.shape[1], hidden=hidden,
+                            output_floor=output_floor)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.SmoothL1Loss()
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, patience=5, factor=0.5, min_lr=1e-6)
 
-    loader = DataLoader(TensorDataset(X_train, y_train), batch_size=64, shuffle=True)
+    loader = DataLoader(TensorDataset(X_train, y_train), batch_size=batch_size,
+                        shuffle=True)
 
     best_val = float('inf')
     best_state = None
     patience_counter = 0
+    epoch = 0
     history = {"train_loss": [], "val_loss": []}
 
     for epoch in range(max_epochs):
@@ -234,12 +278,12 @@ def train_correction_net(X, y, config=None, val_frac=0.2, max_epochs=200, patien
     return model, history
 
 
-def apply_correction(model, ds, diag, k, es_raw, p=0.99):
+def apply_correction(model, ds, diag, k, es_raw, p=0.99, config=None):
     """Apply the correction network to a single ES estimate.
 
     Returns corrected ES value.
     """
-    feats = extract_features(ds, diag, k, p)
+    feats = extract_features(ds, diag, k, p, config)
     if feats is None:
         return es_raw
 

@@ -167,7 +167,7 @@ def main():
             es_raw = pot_es(sorted_desc, k, xi, beta, n, p)
 
             if use_correction:
-                es_est = apply_correction(corr_net, ds, diag, k, es_raw, p)
+                es_est = apply_correction(corr_net, ds, diag, k, es_raw, p, config)
             else:
                 es_est = es_raw
 

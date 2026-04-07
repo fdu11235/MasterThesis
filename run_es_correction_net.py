@@ -98,7 +98,7 @@ def main():
     logger.info("=" * 60)
     logger.info("STEP 2: Training ES correction network")
 
-    corr_model, history = train_correction_net(X_corr, y_corr)
+    corr_model, history = train_correction_net(X_corr, y_corr, config)
 
     ckpt_path = 'outputs/checkpoints/es_correction_net.pt'
     torch.save({
@@ -141,7 +141,7 @@ def main():
         if es_true <= 0 or np.isnan(es_est) or es_est <= 0:
             continue
 
-        es_corrected = apply_correction(corr_model, ds, diag, k, es_est, p)
+        es_corrected = apply_correction(corr_model, ds, diag, k, es_est, p, config)
 
         es_orig_errors.append(((es_est - es_true) / es_true) ** 2)
         es_corr_errors.append(((es_corrected - es_true) / es_true) ** 2)
@@ -250,7 +250,7 @@ def main():
                 es_raw = pot_es(sorted_desc, k, xi, beta, n, p)
 
                 if use_correction:
-                    es_est = apply_correction(corr_model, ds, diag, k, es_raw, p)
+                    es_est = apply_correction(corr_model, ds, diag, k, es_raw, p, config)
                 else:
                     es_est = es_raw
 
