@@ -27,12 +27,12 @@ Comprehensive documentation of all experiments conducted for the ML-assisted POT
 
 ## 1. Key Result
 
-The complete three-stage pipeline — CNN threshold selection + GPD fitting + ES correction network — **passes both the Kupiec VaR test and the McNeil-Frey ES test** on the loss tail of real financial data:
+The complete three-stage pipeline - CNN threshold selection + GPD fitting + ES correction network - **passes both the Kupiec VaR test and the McNeil-Frey ES test** on the loss tail of real financial data:
 
 | Test | Loss Tail Result |
 |---|---|
-| **Kupiec (VaR level)** | **PASS** — VR = 1.11% (expected 1.0%) |
-| **McNeil-Frey (ES shape)** | **PASS** — p = 0.293 |
+| **Kupiec (VaR level)** | **PASS** - VR = 1.11% (expected 1.0%) |
+| **McNeil-Frey (ES shape)** | **PASS** - p = 0.293 |
 
 This is achieved through a three-stage approach:
 
@@ -53,7 +53,7 @@ The correction network reduced the mean ES residual from -0.147 (14.7% overestim
 | META | Equity | 240 | 2.08% | **pass** | 0.644 | **0.830** | **PASS** |
 | ^NYFANG | Index | 183 | 2.73% | **pass** | 0.009 | 0.005 | fail |
 | BTC-USD | Crypto | 291 | 2.06% | **pass** | 0.944 | **0.525** | **PASS** |
-| ETH-USD | Crypto | — | — | — | — | — | — |
+| ETH-USD | Crypto | - | - | - | - | - | - |
 
 ### Per-Instrument Breakdown: Profit Tail (Sign-Split, CNN + ES Correction, p=0.99)
 
@@ -69,12 +69,12 @@ The correction network reduced the mean ES residual from -0.147 (14.7% overestim
 | ETH-USD | Crypto | 265 | 4.15% | fail | 0.002 | 0.002 | fail |
 
 **Key observations:**
-- **Loss tail:** 5 of 7 tickers pass MF with the ES correction network. AMZN and ^NYFANG remain problematic — AMZN has extreme ES overestimation, ^NYFANG has too few violations for reliable testing. ETH-USD produces no loss-tail windows in the test period.
-- **Profit tail:** 4 of 8 tickers pass MF with correction. AMZN fails on both tails. Crypto assets (BTC-USD, ETH-USD) fail on the profit tail — their upside moves are too extreme for the GPD-based ES.
+- **Loss tail:** 5 of 7 tickers pass MF with the ES correction network. AMZN and ^NYFANG remain problematic - AMZN has extreme ES overestimation, ^NYFANG has too few violations for reliable testing. ETH-USD produces no loss-tail windows in the test period.
+- **Profit tail:** 4 of 8 tickers pass MF with correction. AMZN fails on both tails. Crypto assets (BTC-USD, ETH-USD) fail on the profit tail - their upside moves are too extreme for the GPD-based ES.
 - **VaR (Kupiec):** Most tickers pass on the loss tail but fail on the profit tail, where violation rates are 3-5% (vs expected 1%). This suggests the profit tail has heavier extremes or more clustering.
 - **ES correction helps consistently:** MF p-values improve for every ticker where it can be computed, even when the final result still fails.
 
-**The journey to this result** involved extensive experimentation with scoring functions, loss functions, architecture changes, and ES estimation approaches — documented in the chapters below.
+**The journey to this result** involved extensive experimentation with scoring functions, loss functions, architecture changes, and ES estimation approaches - documented in the chapters below.
 
 ---
 
@@ -93,15 +93,19 @@ The project implements an ML-assisted approach to the classical Peaks-over-Thres
 
 | Channel | Feature | Description |
 |:---:|---|---|
-| 0 | xi(k) | GPD shape parameter — parametric tail index at each k |
+| 0 | xi(k) | GPD shape parameter - parametric tail index at each k |
 | 1 | beta(k) | GPD scale parameter at each k |
 | 2 | Anderson-Darling GOF(k) | Goodness-of-fit statistic for the GPD fit at each k |
 | 3 | **Mean excess linearity score(k)** | Measures how well the GPD assumption holds (see below) |
-| 4 | Hill estimator(k) | Non-parametric tail index — consistency check against xi(k) |
+| 4 | Hill estimator(k) | Non-parametric tail index - consistency check against xi(k) |
 | 5 | QQ residual RMSE(k) | QQ-plot deviation between empirical and fitted GPD quantiles |
 | 6 | Mean excess values(k) | Raw mean of exceedances at each threshold |
 
-**Mean excess linearity score (most important feature, see [Feature Ablation](#14-feature-ablation)):** A defining property of the GPD is that its mean excess function e(u) = E[X - u | X > u] is linear in u — no other distribution has this property. For each candidate k, we compute the empirical mean excess at ~10 sub-thresholds within the exceedances, fit a linear regression, and report 1 - R². A score near 0 means the exceedances look GPD (good threshold); a score near 1 means the GPD assumption is violated (bad threshold). This quantifies the classical mean excess plot — which is traditionally inspected visually — as a continuous, computable signal that the CNN can learn from.
+**Mean excess linearity score (most important feature, see [Feature Ablation](#14-feature-ablation)):** A defining property of the GPD is that its mean excess function e(u) = E[X - u | X > u] is linear in u. No other distribution family has this property. For each candidate k, we compute the empirical mean excess at ~10 sub-thresholds within the exceedances, fit a linear regression, and report 1 - R². A score near 0 means the exceedances follow the GPD well (good threshold). A score near 1 means the GPD assumption is violated (bad threshold).
+
+For example, suppose we pick k=100 and the exceedances range from 0 to 5. We evaluate the mean excess at sub-thresholds u = 0, 0.5, 1.0, ..., 4.0. At each u, we compute the average of (exceedance - u) for all exceedances above u. If the resulting 10 points fall on a straight line (R² close to 1), the GPD fits well and the score is close to 0. If the points curve or scatter (R² close to 0), the score is close to 1 and the threshold is likely wrong.
+
+This quantifies the classical mean excess plot, which is traditionally inspected visually, as a continuous signal that the CNN can learn from.
 
 **Architecture:** 3-block ResNet (64-128-128 channels) with residual connections, multi-scale adaptive pooling at sizes [1, 4, 8], and a 2-layer MLP head with Sigmoid output.
 
@@ -137,19 +141,19 @@ The project implements an ML-assisted approach to the classical Peaks-over-Thres
 
 Each panel shows the sample distribution with the threshold at k*, the 5 diagnostic curves (xi, Hill, AD GOF, mean excess linearity, stability), and the composite score with its weighted components (stability w=1, GOF w=1, penalty w=1, mean excess w=2). The red dashed line marks the selected k*.
 
-**Student-t (df=3)** — Heavy-tailed with xi=0.33. The xi(k) curve shows a noisy plateau; the composite score selects k* in the stable region. The distribution histogram shows the heavy tail that GPD models.
+**Student-t (df=3)** - Heavy-tailed with xi=0.33. The xi(k) curve shows a noisy plateau; the composite score selects k* in the stable region. The distribution histogram shows the heavy tail that GPD models.
 
 ![Student-t diagnostics](docs/figures/syn_diagnostics_student-t_df3.png)
 
-**Pareto (alpha=2)** — Pure power-law tail with xi=0.50. Clean plateau in xi(k), low GOF scores across a wide range — an "easy" case for threshold selection. The mean excess component (w=2) dominates the composite score.
+**Pareto (alpha=2)** - Pure power-law tail with xi=0.50. Clean plateau in xi(k), low GOF scores across a wide range - an "easy" case for threshold selection. The mean excess component (w=2) dominates the composite score.
 
 ![Pareto diagnostics](docs/figures/syn_diagnostics_pareto_alpha2.png)
 
-**Burr XII (c=2, d=1)** — Frechet MDA with xi=0.50. Similar to Pareto but with a more complex body distribution; diagnostics show a clear stable region.
+**Burr XII (c=2, d=1)** - Frechet MDA with xi=0.50. Similar to Pareto but with a more complex body distribution; diagnostics show a clear stable region.
 
 ![Burr XII diagnostics](docs/figures/syn_diagnostics_burr_xii_c2_d1.png)
 
-**Lognormal (sigma=1)** — Gumbel MDA with xi=0 (subexponential tail). The xi(k) curve drifts downward rather than plateauing, making threshold selection harder. The scoring function must balance stability against GOF in the absence of a clear plateau. The distribution histogram shows the characteristic right-skewed shape.
+**Lognormal (sigma=1)** - Gumbel MDA with xi=0 (subexponential tail). The xi(k) curve drifts downward rather than plateauing, making threshold selection harder. The scoring function must balance stability against GOF in the absence of a clear plateau. The distribution histogram shows the characteristic right-skewed shape.
 
 ![Lognormal diagnostics](docs/figures/syn_diagnostics_lognormal_sigma1.png)
 
@@ -211,7 +215,7 @@ The high uncorrected ES RMSE (98%) motivated the investigation into ES estimatio
 | Fixed sqrt(n) | 0.88% | pass | <0.001 |
 | Historical sim | 0.86% | pass | 0.773 |
 
-All methods struggle with absolute returns — mixing loss and profit tails degrades both VaR and ES calibration. This motivated the sign-split analysis.
+All methods struggle with absolute returns - mixing loss and profit tails degrades both VaR and ES calibration. This motivated the sign-split analysis.
 
 ![Violation rates](docs/figures/real_violation_rates.png)
 
@@ -233,7 +237,7 @@ Absolute returns |r_t| mix the left tail (losses) and right tail (profits), whic
 | Loss (GARCH) | CNN | 1.17% | pass | 0.006 |
 | Profit (uncond.) | CNN | 1.39% | fail | 0.013 |
 
-**Finding:** Sign-splitting dramatically improved VaR calibration — the CNN passes Kupiec on the loss tail (VR=1.11%). However, ES still failed McNeil-Frey across all experiments. This led to a deep investigation of WHY ES fails.
+**Finding:** Sign-splitting dramatically improved VaR calibration - the CNN passes Kupiec on the loss tail (VR=1.11%). However, ES still failed McNeil-Frey across all experiments. This led to a deep investigation of WHY ES fails.
 
 ### Results (with ES correction network)
 
@@ -272,7 +276,7 @@ When xi > 0.4, small estimation errors in xi and beta are amplified, causing sys
 | 0.6-0.8 | **+26.3% (overestimated)** | 2.5-5x | 198 |
 | 0.8+ | **+104.8%** | 5-20x | 165 |
 
-**Real data sits in the danger zone:** median xi on real loss-tail data is 0.504 — right where errors start growing. Synthetic data has median xi of 0.339, safely in the low-error region.
+**Real data sits in the danger zone:** median xi on real loss-tail data is 0.504 - right where errors start growing. Synthetic data has median xi of 0.339, safely in the low-error region.
 
 ![ES error vs xi](docs/figures/xi_es_scatter.png)
 
@@ -291,7 +295,7 @@ This is NOT a CNN-specific problem. All GPD-based methods fail McNeil-Frey on th
 | Fixed sqrt(n) | <0.001 | no |
 | Historical sim | 0.726 | **yes** (non-parametric, no 1/(1-xi)) |
 
-Only historical simulation passes — because it uses the empirical distribution directly, bypassing the GPD formula entirely.
+Only historical simulation passes - because it uses the empirical distribution directly, bypassing the GPD formula entirely.
 
 ![All methods MF comparison](docs/figures/xi_es_all_methods_mf.png)
 
@@ -324,7 +328,7 @@ Before arriving at the correction network, we tried several approaches to fix ES
 
 | Approach | Loss tail MF p | Improvement? |
 |---|---|---|
-| Parametric ES (baseline) | 0.001 | — |
+| Parametric ES (baseline) | 0.001 | - |
 | pot_es_stable (xi>0.7 threshold) | 0.005 | Marginal |
 | pot_es_stable (xi>0.4 threshold) | 0.087 | Better, but 50% empirical |
 | Bias lookup table (xi bins) | 0.002 | Worse (wrong direction) |
@@ -335,15 +339,15 @@ Before arriving at the correction network, we tried several approaches to fix ES
 A small MLP (865 parameters) that predicts a correction factor from 9 scalar features:
 
 **Input features:**
-1. xi_hat — tail index at predicted k*
-2. beta_hat — scale parameter
-3. k/n — fraction of data used as exceedances
-4. VaR/median — how extreme the VaR is relative to the data
-5. Hill estimator — non-parametric tail index for comparison
-6. AD GoF — goodness-of-fit quality
-7. Mean excess — average exceedance magnitude
-8. Kurtosis — global tail heaviness
-9. 1/(1-xi) — the amplification factor itself
+1. xi_hat - tail index at predicted k*
+2. beta_hat - scale parameter
+3. k/n - fraction of data used as exceedances
+4. VaR/median - how extreme the VaR is relative to the data
+5. Hill estimator - non-parametric tail index for comparison
+6. AD GoF - goodness-of-fit quality
+7. Mean excess - average exceedance magnitude
+8. Kurtosis - global tail heaviness
+9. 1/(1-xi) - the amplification factor itself
 
 **Architecture:** Linear(9→32) → ReLU → Linear(32→16) → ReLU → Linear(16→1) → Softplus + 0.5
 
@@ -420,7 +424,7 @@ Attempted to add VaR and ES quality directly to the loss: `L = alpha * L_k + bet
 | var_0.1_es_0.05 | 9.87% | 40.86% | 17.5% |
 | var_0.0_es_0.1 (ES only) | 9.98% | 41.05% | 17.0% |
 
-**Finding:** VaR-aware loss destabilised training. The VaR/ES gradients overwhelmed k* learning. The simpler asymmetric loss is better — and the ES correction network handles ES quality as a separate stage, which turns out to be far more effective than trying to optimise both in a single loss function.
+**Finding:** VaR-aware loss destabilised training. The VaR/ES gradients overwhelmed k* learning. The simpler asymmetric loss is better - and the ES correction network handles ES quality as a separate stage, which turns out to be far more effective than trying to optimise both in a single loss function.
 
 ![Loss decomposition](docs/figures/syn_loss_decomposition.png)
 
@@ -455,7 +459,7 @@ The stabilizer helped heavy-tailed distributions but hurt some moderate-tailed o
 | pot_es_stable (xi>0.5) | 0.048 | 0.409 |
 | pot_es_stable (xi>0.4) | 0.087 | 0.188 |
 
-Lowering the threshold to 0.4 passes both tails, but at the cost of 50% of windows using empirical ES — partially defeating the parametric approach.
+Lowering the threshold to 0.4 passes both tails, but at the cost of 50% of windows using empirical ES - partially defeating the parametric approach.
 
 ### Bias Lookup Table
 
@@ -466,7 +470,7 @@ Estimated ES bias per xi bin from synthetic data, applied as a correction to rea
 | Loss | p=0.003 | p=0.002 (worse) |
 | Profit | p=0.013 | **p=0.184 (pass)** |
 
-The table was too coarse — it worked for the profit tail but failed for the loss tail because AMZN and crypto have different bias patterns than what synthetic data predicts.
+The table was too coarse - it worked for the profit tail but failed for the loss tail because AMZN and crypto have different bias patterns than what synthetic data predicts.
 
 ### Conclusion
 
@@ -480,7 +484,7 @@ Following McNeil & Frey (2000), we fit GARCH(1,1) to signed returns within each 
 
 Results are comparable to unconditional sign-split: Loss GARCH CNN passes Kupiec (VR=1.17%), with similar ES characteristics.
 
-**Historical simulation breaks** under GARCH sign-split (VaR in z-score units vs raw returns) — a units mismatch fixed for GPD methods but not for historical sim.
+**Historical simulation breaks** under GARCH sign-split (VaR in z-score units vs raw returns) - a units mismatch fixed for GPD methods but not for historical sim.
 
 ![GARCH training curves](docs/figures/real_garch_training_curves.png)
 
@@ -517,7 +521,7 @@ Removing one of 7 CNN features at a time:
 | Remove xi_hat | 16.03% | **62.05%** | 77.3% |
 | Remove qq_resid | 15.96% | 66.82% | 74.8% |
 
-**Finding:** mean_excess_score is the most important feature for both VaR accuracy and baseline agreement. qq_resid is nearly redundant. Removing xi_hat or beta_hat actually improves ES — the CNN may overfit to noisy parameter estimates.
+**Finding:** mean_excess_score is the most important feature for both VaR accuracy and baseline agreement. qq_resid is nearly redundant. Removing xi_hat or beta_hat actually improves ES - the CNN may overfit to noisy parameter estimates.
 
 ---
 
@@ -528,7 +532,7 @@ Removing one of 7 CNN features at a time:
 | Metric | Single Model | Ensemble |
 |---|---|---|
 | VaR Rel RMSE | 15.99% +/- 0.05% | 15.96% |
-| Uncertainty correlation | — | 0.592 |
+| Uncertainty correlation | - | 0.592 |
 
 **Finding:** Negligible RMSE improvement, but the ensemble provides a meaningful uncertainty signal (correlation 0.59 between disagreement and error). Training is robust to seed initialisation (0.05% variance).
 
