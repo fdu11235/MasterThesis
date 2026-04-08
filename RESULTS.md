@@ -133,17 +133,15 @@ The project implements an ML-assisted approach to the classical Peaks-over-Thres
 
 **Total:** 43 parameter combinations x 200 replications = **8,400 datasets** (+ 13,440 augmented = 21,840 training samples).
 
-![Diagnostic curves](docs/figures/syn_diagnostic_curves.png)
-
 ### Per-Distribution Diagnostic Examples
 
-The following panels show the 5 diagnostic curves and composite score for representative distributions. Each panel shows xi(k), Anderson-Darling GOF(k), mean excess linearity score(k), Hill estimator(k), stability score(k), and the composite score with its components. The red dashed line marks the selected k*.
+Each panel shows the sample distribution with the threshold at k*, the 5 diagnostic curves (xi, Hill, AD GOF, mean excess linearity, stability), and the composite score with its weighted components (stability w=1, GOF w=1, penalty w=1, mean excess w=2). The red dashed line marks the selected k*.
 
-**Student-t (df=3)** — Heavy-tailed with xi=0.33. The xi(k) curve shows a noisy plateau; the composite score selects k* in the stable region.
+**Student-t (df=3)** — Heavy-tailed with xi=0.33. The xi(k) curve shows a noisy plateau; the composite score selects k* in the stable region. The distribution histogram shows the heavy tail that GPD models.
 
 ![Student-t diagnostics](docs/figures/syn_diagnostics_student-t_df3.png)
 
-**Pareto (alpha=2)** — Pure power-law tail with xi=0.50. Clean plateau in xi(k), low GOF scores across a wide range — an "easy" case for threshold selection.
+**Pareto (alpha=2)** — Pure power-law tail with xi=0.50. Clean plateau in xi(k), low GOF scores across a wide range — an "easy" case for threshold selection. The mean excess component (w=2) dominates the composite score.
 
 ![Pareto diagnostics](docs/figures/syn_diagnostics_pareto_alpha2.png)
 
@@ -151,7 +149,7 @@ The following panels show the 5 diagnostic curves and composite score for repres
 
 ![Burr XII diagnostics](docs/figures/syn_diagnostics_burr_xii_c2_d1.png)
 
-**Lognormal (sigma=1)** — Gumbel MDA with xi=0 (subexponential tail). The xi(k) curve drifts downward rather than plateauing, making threshold selection harder. The scoring function must balance stability against GOF in the absence of a clear plateau.
+**Lognormal (sigma=1)** — Gumbel MDA with xi=0 (subexponential tail). The xi(k) curve drifts downward rather than plateauing, making threshold selection harder. The scoring function must balance stability against GOF in the absence of a clear plateau. The distribution histogram shows the characteristic right-skewed shape.
 
 ![Lognormal diagnostics](docs/figures/syn_diagnostics_lognormal_sigma1.png)
 
