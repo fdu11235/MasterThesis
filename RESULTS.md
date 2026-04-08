@@ -42,6 +42,38 @@ This is achieved through a three-stage approach:
 
 The correction network reduced the mean ES residual from -0.147 (14.7% overestimation) to -0.050 (5.0%) on the loss tail, turning a strong rejection (p=0.001) into a comfortable pass (p=0.293).
 
+### Per-Instrument Breakdown: Loss Tail (Sign-Split, CNN + ES Correction, p=0.99)
+
+| Ticker | Type | N | VR | Kupiec | MF uncorrected | MF corrected | ES pass? |
+|---|---|---|---|---|---|---|---|
+| AAPL | Equity | 183 | 4.92% | fail | 0.190 | **0.961** | **PASS** |
+| MSFT | Equity | 183 | 2.19% | **pass** | 0.244 | **0.779** | **PASS** |
+| NVDA | Equity | 183 | 1.64% | **pass** | 0.027 | **0.054** | **PASS** |
+| AMZN | Equity | 366 | 1.64% | **pass** | 0.004 | 0.025 | fail |
+| META | Equity | 240 | 2.08% | **pass** | 0.644 | **0.830** | **PASS** |
+| ^NYFANG | Index | 183 | 2.73% | **pass** | 0.009 | 0.005 | fail |
+| BTC-USD | Crypto | 291 | 2.06% | **pass** | 0.944 | **0.525** | **PASS** |
+| ETH-USD | Crypto | — | — | — | — | — | — |
+
+### Per-Instrument Breakdown: Profit Tail (Sign-Split, CNN + ES Correction, p=0.99)
+
+| Ticker | Type | N | VR | Kupiec | MF uncorrected | MF corrected | ES pass? |
+|---|---|---|---|---|---|---|---|
+| AAPL | Equity | 182 | 3.85% | fail | 0.497 | **0.913** | **PASS** |
+| MSFT | Equity | 182 | 3.85% | fail | 0.172 | **0.673** | **PASS** |
+| NVDA | Equity | 182 | 3.85% | fail | 0.946 | **0.546** | **PASS** |
+| AMZN | Equity | 182 | 4.95% | fail | 0.016 | 0.028 | fail |
+| META | Equity | 182 | 4.95% | fail | 0.690 | **0.601** | **PASS** |
+| ^NYFANG | Index | 182 | 3.30% | fail | 0.616 | **0.533** | **PASS** |
+| BTC-USD | Crypto | 265 | 1.13% | **pass** | 0.027 | 0.013 | fail |
+| ETH-USD | Crypto | 265 | 4.15% | fail | 0.002 | 0.002 | fail |
+
+**Key observations:**
+- **Loss tail:** 5 of 7 tickers pass MF with the ES correction network. AMZN and ^NYFANG remain problematic — AMZN has extreme ES overestimation, ^NYFANG has too few violations for reliable testing. ETH-USD produces no loss-tail windows in the test period.
+- **Profit tail:** 4 of 8 tickers pass MF with correction. AMZN fails on both tails. Crypto assets (BTC-USD, ETH-USD) fail on the profit tail — their upside moves are too extreme for the GPD-based ES.
+- **VaR (Kupiec):** Most tickers pass on the loss tail but fail on the profit tail, where violation rates are 3-5% (vs expected 1%). This suggests the profit tail has heavier extremes or more clustering.
+- **ES correction helps consistently:** MF p-values improve for every ticker where it can be computed, even when the final result still fails.
+
 **The journey to this result** involved extensive experimentation with scoring functions, loss functions, architecture changes, and ES estimation approaches — documented in the chapters below.
 
 ---
@@ -51,11 +83,25 @@ The correction network reduced the mean ES residual from -0.147 (14.7% overestim
 The project implements an ML-assisted approach to the classical Peaks-over-Threshold (POT) problem: given a sample, select the optimal number of exceedances k for fitting a Generalized Pareto Distribution (GPD) to the tail.
 
 **Pipeline:**
-1. For each candidate k, fit GPD and compute 7 diagnostic features (xi_hat, beta_hat, Anderson-Darling GoF, mean excess linearity, Hill estimator, QQ residual, raw mean excess)
+1. For each candidate k, fit GPD and compute 7 diagnostic features (see below)
 2. A baseline scoring function combines stability, GoF, penalty, and mean excess scores to select k*
 3. A 1D ResNet CNN is trained to predict k* from the diagnostic feature curves
 4. The predicted k* is used to compute VaR and ES via the GPD quantile formula
 5. An ES correction network post-processes the ES estimate to remove systematic bias
+
+**7 CNN input features** (each is a curve over the candidate k-grid, forming a 7-channel 1D signal):
+
+| Channel | Feature | Description |
+|:---:|---|---|
+| 0 | xi(k) | GPD shape parameter — parametric tail index at each k |
+| 1 | beta(k) | GPD scale parameter at each k |
+| 2 | Anderson-Darling GOF(k) | Goodness-of-fit statistic for the GPD fit at each k |
+| 3 | **Mean excess linearity score(k)** | Measures how well the GPD assumption holds (see below) |
+| 4 | Hill estimator(k) | Non-parametric tail index — consistency check against xi(k) |
+| 5 | QQ residual RMSE(k) | QQ-plot deviation between empirical and fitted GPD quantiles |
+| 6 | Mean excess values(k) | Raw mean of exceedances at each threshold |
+
+**Mean excess linearity score (most important feature, see [Feature Ablation](#14-feature-ablation)):** A defining property of the GPD is that its mean excess function e(u) = E[X - u | X > u] is linear in u — no other distribution has this property. For each candidate k, we compute the empirical mean excess at ~10 sub-thresholds within the exceedances, fit a linear regression, and report 1 - R². A score near 0 means the exceedances look GPD (good threshold); a score near 1 means the GPD assumption is violated (bad threshold). This quantifies the classical mean excess plot — which is traditionally inspected visually — as a continuous, computable signal that the CNN can learn from.
 
 **Architecture:** 3-block ResNet (64-128-128 channels) with residual connections, multi-scale adaptive pooling at sizes [1, 4, 8], and a 2-layer MLP head with Sigmoid output.
 
@@ -88,6 +134,26 @@ The project implements an ML-assisted approach to the classical Peaks-over-Thres
 **Total:** 43 parameter combinations x 200 replications = **8,400 datasets** (+ 13,440 augmented = 21,840 training samples).
 
 ![Diagnostic curves](docs/figures/syn_diagnostic_curves.png)
+
+### Per-Distribution Diagnostic Examples
+
+The following panels show the 5 diagnostic curves and composite score for representative distributions. Each panel shows xi(k), Anderson-Darling GOF(k), mean excess linearity score(k), Hill estimator(k), stability score(k), and the composite score with its components. The red dashed line marks the selected k*.
+
+**Student-t (df=3)** — Heavy-tailed with xi=0.33. The xi(k) curve shows a noisy plateau; the composite score selects k* in the stable region.
+
+![Student-t diagnostics](docs/figures/syn_diagnostics_student-t_df3.png)
+
+**Pareto (alpha=2)** — Pure power-law tail with xi=0.50. Clean plateau in xi(k), low GOF scores across a wide range — an "easy" case for threshold selection.
+
+![Pareto diagnostics](docs/figures/syn_diagnostics_pareto_alpha2.png)
+
+**Burr XII (c=2, d=1)** — Frechet MDA with xi=0.50. Similar to Pareto but with a more complex body distribution; diagnostics show a clear stable region.
+
+![Burr XII diagnostics](docs/figures/syn_diagnostics_burr_xii_c2_d1.png)
+
+**Lognormal (sigma=1)** — Gumbel MDA with xi=0 (subexponential tail). The xi(k) curve drifts downward rather than plateauing, making threshold selection harder. The scoring function must balance stability against GOF in the absence of a clear plateau.
+
+![Lognormal diagnostics](docs/figures/syn_diagnostics_lognormal_sigma1.png)
 
 ---
 
