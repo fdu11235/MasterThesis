@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from scipy import stats
 
 from scipy.stats import genpareto, norm
+from scipy.special import gamma as gamma_fn, beta as beta_fn, betainc, gammainc, gammaincc
 
 from src.synthetic import (
     _generate_student_t, _generate_pareto,
@@ -249,31 +250,42 @@ def _analytical_es(dist_type, dist_params, p):
         phi_inv_p = norm.ppf(p)
         return np.exp(sigma * sigma / 2.0) * norm.cdf(sigma - phi_inv_p) / (1.0 - p)
 
-    # Remaining distributions: use scipy quadrature via .expect(..., conditional=True).
-    dist = None
     if dist_type == 'burr12':
-        dist = stats.burr12(c=dist_params['c'], d=dist_params['d'])
-    elif dist_type == 'frechet':
-        dist = stats.invweibull(c=dist_params['c'])
-    elif dist_type == 'dagum':
-        dist = stats.burr(c=dist_params['c'], d=dist_params['d'])
-    elif dist_type == 'inverse_gamma':
-        dist = stats.invgamma(a=dist_params['a'])
-    elif dist_type == 'weibull_stretched':
-        dist = stats.weibull_min(c=dist_params['c'])
-
-    if dist is None:
-        return None
-
-    var = dist.ppf(p)
-    try:
-        es = dist.expect(lambda x: x, lb=var, ub=np.inf, conditional=True)
-        if not np.isfinite(es):
+        c, d = dist_params['c'], dist_params['d']
+        if c * d <= 1:
             return None
-        return float(es)
-    except Exception as e:
-        logger.debug("Analytical ES quadrature failed for %s: %s", dist_type, e)
-        return None
+        a1, a2 = d - 1.0 / c, 1.0 + 1.0 / c
+        x = (1.0 - p) ** (1.0 / d)
+        return float(d * beta_fn(a1, a2) * betainc(a1, a2, x) / (1.0 - p))
+
+    if dist_type == 'frechet':
+        c = dist_params['c']
+        if c <= 1:
+            return None
+        s = 1.0 - 1.0 / c
+        return float(gamma_fn(s) * gammainc(s, -np.log(p)) / (1.0 - p))
+
+    if dist_type == 'dagum':
+        c, d = dist_params['c'], dist_params['d']
+        if c <= 1:
+            return None
+        a1, a2 = 1.0 - 1.0 / c, d + 1.0 / c
+        x = 1.0 - p ** (1.0 / d)
+        return float(d * beta_fn(a1, a2) * betainc(a1, a2, x) / (1.0 - p))
+
+    if dist_type == 'inverse_gamma':
+        a = dist_params['a']
+        if a <= 1:
+            return None
+        var = stats.invgamma.ppf(p, a=a)
+        return float(gamma_fn(a - 1) * gammainc(a - 1, 1.0 / var) / (gamma_fn(a) * (1.0 - p)))
+
+    if dist_type == 'weibull_stretched':
+        c = dist_params['c']
+        s = 1.0 + 1.0 / c
+        return float(gamma_fn(s) * gammaincc(s, -np.log(1.0 - p)) / (1.0 - p))
+
+    return None
 
 
 def true_es(dist_type, dist_params, p):
