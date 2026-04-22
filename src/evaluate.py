@@ -1,5 +1,6 @@
 import logging
 import os
+import pickle
 
 import numpy as np
 import matplotlib
@@ -7,7 +8,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy import stats
 
-from scipy.stats import genpareto
+from scipy.stats import genpareto, norm
 
 from src.synthetic import (
     _generate_student_t, _generate_pareto,
@@ -17,12 +18,42 @@ from src.synthetic import (
 
 logger = logging.getLogger(__name__)
 
+_MC_CACHE_PATH = "outputs/data/mc_es_cache.pkl"
 _mc_quantile_cache = {}
 _mc_es_cache = {}
+_cache_loaded = False
 
 
 def _params_key(dist_type, dist_params, p):
     return (dist_type, tuple(sorted(dist_params.items())), p)
+
+
+def _load_cache():
+    """Load persistent MC caches from disk on first use."""
+    global _mc_quantile_cache, _mc_es_cache, _cache_loaded
+    if _cache_loaded:
+        return
+    _cache_loaded = True
+    if os.path.exists(_MC_CACHE_PATH):
+        try:
+            with open(_MC_CACHE_PATH, "rb") as f:
+                data = pickle.load(f)
+            _mc_quantile_cache.update(data.get("quantile", {}))
+            _mc_es_cache.update(data.get("es", {}))
+            logger.info("Loaded MC cache from %s (%d quantile, %d es entries)",
+                        _MC_CACHE_PATH, len(_mc_quantile_cache), len(_mc_es_cache))
+        except Exception as e:
+            logger.warning("Failed to load MC cache: %s", e)
+
+
+def _save_cache():
+    """Persist the MC caches to disk."""
+    os.makedirs(os.path.dirname(_MC_CACHE_PATH), exist_ok=True)
+    try:
+        with open(_MC_CACHE_PATH, "wb") as f:
+            pickle.dump({"quantile": _mc_quantile_cache, "es": _mc_es_cache}, f)
+    except Exception as e:
+        logger.warning("Failed to save MC cache: %s", e)
 
 
 def _mc_quantile(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
@@ -149,10 +180,12 @@ def true_quantile(dist_type, dist_params, p):
         return stats.weibull_min.ppf(p, c=dist_params['c'])
     elif dist_type in ('lognormal_pareto_mix', 'two_pareto',
                         'log_gamma', 'gamma_pareto_splice'):
+        _load_cache()
         key = _params_key(dist_type, dist_params, p)
         if key not in _mc_quantile_cache:
             logger.info("Computing MC quantile for %s (p=%s) ...", dist_type, p)
             _mc_quantile_cache[key] = _mc_quantile(dist_type, dist_params, p)
+            _save_cache()
         return _mc_quantile_cache[key]
     raise ValueError(f"Unknown dist_type: {dist_type}")
 
@@ -183,16 +216,86 @@ def _mc_es(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
     return float(tail.mean()) if len(tail) > 0 else float(q)
 
 
-def true_es(dist_type, dist_params, p):
-    """True Expected Shortfall via Monte Carlo: E[X | X > VaR(p)].
+def _analytical_es(dist_type, dist_params, p):
+    """Closed-form or numerically-integrated ES for tractable distributions.
 
-    Uses 10M samples, cached by (dist_type, params, p).
-    Matches the MC approach in run_diff_pipeline.py for consistency.
+    Returns None for distributions without a practical analytical form
+    (composites like mixtures/splices, Log-Gamma). For Student-t the
+    distribution of |T| is used (matches the abs-return convention in
+    the synthetic generator).
     """
+    if dist_type == 'pareto':
+        alpha = dist_params['alpha']
+        if alpha <= 1:
+            return None  # ES undefined (infinite mean)
+        var = stats.pareto.ppf(p, b=alpha)
+        return var * alpha / (alpha - 1)
+
+    if dist_type == 'student_t':
+        df = dist_params['df']
+        if df <= 1:
+            return None
+        # Synthetic samples are |T|, so VaR at prob p of |T| equals the
+        # t-quantile at (1+p)/2. By symmetry, E[|T| | |T|>v] = E[T | T>v].
+        upper_p = (p + 1.0) / 2.0
+        v = stats.t.ppf(upper_p, df=df)
+        fv = stats.t.pdf(v, df=df)
+        # E[T | T>v] = (df + v^2)/(df-1) * f(v) / (1 - F(v)),
+        # and 1 - F(v) = (1-p)/2 on the upper tail.
+        return (df + v * v) / (df - 1.0) * fv / ((1.0 - p) / 2.0)
+
+    if dist_type == 'lognormal':
+        sigma = dist_params['sigma']
+        phi_inv_p = norm.ppf(p)
+        return np.exp(sigma * sigma / 2.0) * norm.cdf(sigma - phi_inv_p) / (1.0 - p)
+
+    # Remaining distributions: use scipy quadrature via .expect(..., conditional=True).
+    dist = None
+    if dist_type == 'burr12':
+        dist = stats.burr12(c=dist_params['c'], d=dist_params['d'])
+    elif dist_type == 'frechet':
+        dist = stats.invweibull(c=dist_params['c'])
+    elif dist_type == 'dagum':
+        dist = stats.burr(c=dist_params['c'], d=dist_params['d'])
+    elif dist_type == 'inverse_gamma':
+        dist = stats.invgamma(a=dist_params['a'])
+    elif dist_type == 'weibull_stretched':
+        dist = stats.weibull_min(c=dist_params['c'])
+
+    if dist is None:
+        return None
+
+    var = dist.ppf(p)
+    try:
+        es = dist.expect(lambda x: x, lb=var, ub=np.inf, conditional=True)
+        if not np.isfinite(es):
+            return None
+        return float(es)
+    except Exception as e:
+        logger.debug("Analytical ES quadrature failed for %s: %s", dist_type, e)
+        return None
+
+
+def true_es(dist_type, dist_params, p):
+    """True Expected Shortfall: E[X | X > VaR(p)].
+
+    Uses a closed-form / numerically integrated value where available,
+    falling back to Monte Carlo (10M samples) for composite distributions.
+    Both paths are cached by (dist_type, params, p), with persistence to
+    ``outputs/data/mc_es_cache.pkl`` so results are reused across runs.
+    """
+    dist_type, dist_params = _resolve_garch_type(dist_type, dist_params)
+    _load_cache()
     key = _params_key(dist_type, dist_params, p)
-    if key not in _mc_es_cache:
+    if key in _mc_es_cache:
+        return _mc_es_cache[key]
+
+    val = _analytical_es(dist_type, dist_params, p)
+    if val is None:
         logger.info("Computing MC ES for %s (p=%s) ...", dist_type, p)
-        _mc_es_cache[key] = _mc_es(dist_type, dist_params, p)
+        val = _mc_es(dist_type, dist_params, p)
+    _mc_es_cache[key] = float(val)
+    _save_cache()
     return _mc_es_cache[key]
 
 
