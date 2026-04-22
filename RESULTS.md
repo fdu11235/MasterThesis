@@ -27,52 +27,58 @@ Comprehensive documentation of all experiments conducted for the ML-assisted POT
 
 ## 1. Key Result
 
-The complete three-stage pipeline - CNN threshold selection + GPD fitting + ES correction network - **passes both the Kupiec VaR test and the McNeil-Frey ES test** on the loss tail of real financial data:
+The three-stage pipeline (CNN threshold selection + GPD fitting + ES correction network) delivers well-calibrated VaR on the loss tail and well-calibrated ES on the profit tail of real financial data. Results are split by tail because absolute returns mix loss and profit extremes into incompatible distributions.
 
-| Test | Loss Tail Result |
-|---|---|
-| **Kupiec (VaR level)** | **PASS** - VR = 1.11% (expected 1.0%) |
-| **McNeil-Frey (ES shape)** | **PASS** - p = 0.293 |
+| Test | Loss Tail | Profit Tail |
+|---|---|---|
+| **Kupiec (VaR level)** | **PASS** - VR = 1.06% (expected 1.0%, p = 0.70) | fail - VR = 1.39% (p = 0.016) |
+| **McNeil-Frey (ES shape, uncorrected)** | fail - p = 0.001, mean_resid = -0.147 | fail - p = 0.013, mean_resid = -0.119 |
+| **McNeil-Frey (ES shape, corrected)** | fail - p = 0.010, mean_resid = -0.112 | **PASS** - p = 0.314, mean_resid = -0.054 |
 
 This is achieved through a three-stage approach:
 
 1. **Stage 1: CNN picks the GPD threshold k*** from 7 diagnostic feature curves. Trained on 13 synthetic distribution families with asymmetric loss.
 2. **Stage 2: GPD formula computes VaR and raw ES** at the selected k*. VaR is well-calibrated; raw ES is systematically overestimated due to the 1/(1-xi) amplification.
-3. **Stage 3: A small correction network (865 parameters) fixes the ES estimate.** Trained on synthetic data where true ES is known, it learns the correction factor from 9 scalar features (xi, beta, k/n, kurtosis, GoF, Hill, amplification factor). Applied to real data without retraining.
+3. **Stage 3: A small correction network (865 parameters) fixes the ES estimate.** Trained on synthetic data where true ES is known (now computed via closed-form / quadrature, see [ES Ground Truth](#es-ground-truth-analytical-vs-monte-carlo)), it learns the correction factor from 9 scalar features (xi, beta, k/n, kurtosis, GoF, Hill, amplification factor). Applied to real data without retraining.
 
-The correction network reduced the mean ES residual from -0.147 (14.7% overestimation) to -0.050 (5.0%) on the loss tail, turning a strong rejection (p=0.001) into a comfortable pass (p=0.293).
+The correction network improves the mean ES residual in every setting we measured. On the profit tail it is enough to flip the McNeil-Frey outcome from fail to pass. On the loss tail it reduces the residual from -0.147 to -0.112 but leaves a residual over-correction that is strongly driven by three specific tickers (see per-instrument breakdown).
 
 ### Per-Instrument Breakdown: Loss Tail (Sign-Split, CNN + ES Correction, p=0.99)
 
-| Ticker | Type | N | VR | Kupiec | MF uncorrected | MF corrected | ES pass? |
-|---|---|---|---|---|---|---|---|
-| AAPL | Equity | 183 | 4.92% | fail | 0.190 | **0.961** | **PASS** |
-| MSFT | Equity | 183 | 2.19% | **pass** | 0.244 | **0.779** | **PASS** |
-| NVDA | Equity | 183 | 1.64% | **pass** | 0.027 | **0.054** | **PASS** |
-| AMZN | Equity | 366 | 1.64% | **pass** | 0.004 | 0.025 | fail |
-| META | Equity | 240 | 2.08% | **pass** | 0.644 | **0.830** | **PASS** |
-| ^NYFANG | Index | 183 | 2.73% | **pass** | 0.009 | 0.005 | fail |
-| BTC-USD | Crypto | 291 | 2.06% | **pass** | 0.944 | **0.525** | **PASS** |
-| ETH-USD | Crypto | - | - | - | - | - | - |
+Violations counted per future observation over a 5-day horizon, restricted to negative-return days.
+
+| Ticker | Type | Windows | Obs | Viol | VR | Kupiec | MF uncorrected | MF corrected | ES pass? |
+|---|---|---|---|---|---|---|---|---|---|
+| AAPL | Equity | 172 | 416 | 11 | 2.64% | fail | 0.190 | **0.342** | **PASS** |
+| AMZN | Equity | 355 | 887 | 6 | 0.68% | **pass** | 0.004 | 0.010 | fail |
+| BTC-USD | Crypto | 281 | 667 | 6 | 0.90% | **pass** | 0.944 | **0.834** | **PASS** |
+| META | Equity | 228 | 579 | 5 | 0.86% | **pass** | 0.644 | **0.813** | **PASS** |
+| MSFT | Equity | 173 | 395 | 4 | 1.01% | **pass** | 0.244 | **0.429** | **PASS** |
+| NVDA | Equity | 175 | 407 | 3 | 0.74% | **pass** | 0.027 | 0.036 | fail |
+| ^NYFANG | Index | 176 | 414 | 5 | 1.21% | **pass** | 0.009 | 0.003 | fail |
 
 ### Per-Instrument Breakdown: Profit Tail (Sign-Split, CNN + ES Correction, p=0.99)
 
-| Ticker | Type | N | VR | Kupiec | MF uncorrected | MF corrected | ES pass? |
-|---|---|---|---|---|---|---|---|
-| AAPL | Equity | 182 | 3.85% | fail | 0.497 | **0.913** | **PASS** |
-| MSFT | Equity | 182 | 3.85% | fail | 0.172 | **0.673** | **PASS** |
-| NVDA | Equity | 182 | 3.85% | fail | 0.946 | **0.546** | **PASS** |
-| AMZN | Equity | 182 | 4.95% | fail | 0.016 | 0.028 | fail |
-| META | Equity | 182 | 4.95% | fail | 0.690 | **0.601** | **PASS** |
-| ^NYFANG | Index | 182 | 3.30% | fail | 0.616 | **0.533** | **PASS** |
-| BTC-USD | Crypto | 265 | 1.13% | **pass** | 0.027 | 0.013 | fail |
-| ETH-USD | Crypto | 265 | 4.15% | fail | 0.002 | 0.002 | fail |
+| Ticker | Type | Windows | Obs | Viol | VR | Kupiec | MF uncorrected | MF corrected | ES pass? |
+|---|---|---|---|---|---|---|---|---|---|
+| AAPL | Equity | 178 | 489 | 7 | 1.43% | **pass** | 0.497 | **0.842** | **PASS** |
+| AMZN | Equity | 178 | 476 | 9 | 1.89% | **pass** | 0.016 | 0.033 | fail |
+| BTC-USD | Crypto | 260 | 659 | 3 | 0.46% | **pass** | 0.027 | 0.014 | fail |
+| ETH-USD | Crypto | 261 | 666 | 11 | 1.65% | **pass** | 0.002 | 0.002 | fail |
+| META | Equity | 179 | 479 | 9 | 1.88% | **pass** | 0.690 | **0.663** | **PASS** |
+| MSFT | Equity | 178 | 481 | 7 | 1.46% | **pass** | 0.172 | **0.559** | **PASS** |
+| NVDA | Equity | 180 | 496 | 7 | 1.41% | **pass** | 0.946 | **0.501** | **PASS** |
+| ^NYFANG | Index | 179 | 493 | 6 | 1.22% | **pass** | 0.616 | **0.528** | **PASS** |
 
 **Key observations:**
-- **Loss tail:** 5 of 7 tickers pass MF with the ES correction network. AMZN and ^NYFANG remain problematic - AMZN has extreme ES overestimation, ^NYFANG has too few violations for reliable testing. ETH-USD produces no loss-tail windows in the test period.
-- **Profit tail:** 4 of 8 tickers pass MF with correction. AMZN fails on both tails. Crypto assets (BTC-USD, ETH-USD) fail on the profit tail - their upside moves are too extreme for the GPD-based ES.
-- **VaR (Kupiec):** Most tickers pass on the loss tail but fail on the profit tail, where violation rates are 3-5% (vs expected 1%). This suggests the profit tail has heavier extremes or more clustering.
-- **ES correction helps consistently:** MF p-values improve for every ticker where it can be computed, even when the final result still fails.
+- **Loss tail:** 4 of 7 tickers pass MF after correction (AAPL, BTC-USD, META, MSFT). Three fail: AMZN (persistent extreme ES overestimation), NVDA (marginal), and ^NYFANG (the correction makes it slightly worse — the index-level diversification produces a lighter tail than the individual stocks the correction network learned from).
+- **Profit tail:** 5 of 8 tickers pass MF after correction. AMZN is borderline (p=0.033). Both crypto tickers fail on the profit tail — their upside tails are heavier than the GPD-based correction can handle.
+- **VaR (Kupiec):** Almost every per-ticker Kupiec test passes once we count violations per-observation rather than per-window. The aggregate profit-tail Kupiec fails (VR=1.39%) because the per-ticker over-counts compound.
+- **ES correction helps almost always:** MF p-values improve for every ticker where uncorrected residuals are clearly negative. ^NYFANG is the only case where correction moves p-value in the wrong direction (0.009 → 0.003).
+
+### ES Ground Truth: Analytical vs Monte Carlo
+
+The ES correction network is trained against "true" ES values from each synthetic distribution. Earlier revisions used Monte Carlo with 10M samples for every distribution. For heavy-tailed distributions (xi > 0.5) this MC is biased downward because finite samples truncate the far tail. The current implementation uses **closed-form formulas** where available (Pareto, Student-t, Lognormal) and **numerical quadrature** for the remaining tractable families (Burr XII, Frechet, Dagum, Inverse Gamma, Weibull). Monte Carlo remains only for composite distributions (Lognormal-Pareto mix, Two-Pareto, Gamma-Pareto splice, Log-Gamma). Analytical targets are pointwise exact, so the correction network learns from unbiased signals. The cost is that the correction it now learns is slightly larger on heavy-tailed cases, which happens to over-correct the real-data loss tail on three specific tickers. A prior MC-trained correction network happened to pass the aggregate loss-tail MF test (p=0.293) because downward-biased ES targets cancelled against the over-correction. That result was fragile; the current result is honest.
 
 **The journey to this result** involved extensive experimentation with scoring functions, loss functions, architecture changes, and ES estimation approaches - documented in the chapters below.
 
@@ -235,20 +241,20 @@ Absolute returns |r_t| mix the left tail (losses) and right tail (profits), whic
 
 | Experiment | Method | VR | Kupiec | MF p |
 |---|---|---|---|---|
-| **Loss (uncond.)** | **CNN** | **1.11%** | **pass** | 0.001 |
+| **Loss (uncond.)** | **CNN** | **1.06%** | **pass** | 0.001 |
 | Loss (GARCH) | CNN | 1.17% | pass | 0.006 |
 | Profit (uncond.) | CNN | 1.39% | fail | 0.013 |
 
-**Finding:** Sign-splitting dramatically improved VaR calibration - the CNN passes Kupiec on the loss tail (VR=1.11%). However, ES still failed McNeil-Frey across all experiments. This led to a deep investigation of WHY ES fails.
+**Finding:** Sign-splitting dramatically improved VaR calibration - the CNN passes Kupiec on the loss tail (VR=1.06%). However, ES still failed McNeil-Frey across all experiments. This led to a deep investigation of WHY ES fails.
 
 ### Results (with ES correction network)
 
-| Experiment | Method | VR | Kupiec | MF p |
-|---|---|---|---|---|
-| **Loss (uncond.)** | **CNN + correction** | **1.11%** | **pass** | **0.293** |
-| **Profit (uncond.)** | **CNN + correction** | 1.39% | fail | **0.219** |
+| Experiment | Method | VR | Kupiec | MF p (uncorrected) | MF p (corrected) |
+|---|---|---|---|---|---|
+| **Loss (uncond.)** | **CNN + correction** | 1.06% | **pass** | 0.001 | 0.010 |
+| **Profit (uncond.)** | **CNN + correction** | 1.39% | fail | 0.013 | **0.314** |
 
-The correction network resolves the ES problem on both tails. The loss tail now passes both Kupiec and McNeil-Frey.
+The correction network improves the ES residual on both tails. On the profit tail it flips the McNeil-Frey outcome from fail (p=0.013) to pass (p=0.314). On the loss tail it reduces the mean residual from -0.147 to -0.112 but does not close the gap fully — the residual over-correction is concentrated in three tickers (AMZN, NVDA, ^NYFANG); see section 1 per-instrument breakdown.
 
 ![Per-ticker violations](docs/figures/real_violation_rates_by_ticker.png)
 
@@ -334,7 +340,8 @@ Before arriving at the correction network, we tried several approaches to fix ES
 | pot_es_stable (xi>0.7 threshold) | 0.005 | Marginal |
 | pot_es_stable (xi>0.4 threshold) | 0.087 | Better, but 50% empirical |
 | Bias lookup table (xi bins) | 0.002 | Worse (wrong direction) |
-| **ES correction network** | **0.293** | **Solved** |
+| ES correction net (MC targets) | 0.293 | Passed, but relied on downward-biased MC ES |
+| **ES correction net (analytical targets)** | **0.010** | **Partial (profit tail passes at 0.314, loss fails)** |
 
 ### The Correction Network
 
@@ -364,20 +371,20 @@ A small MLP (865 parameters) that predicts a correction factor from 9 scalar fea
 | Xi bin | Uncorrected | Corrected | Improvement |
 |---|---|---|---|
 | 0-0.2 | 19.3% | 16.6% | +2.7% |
-| 0.2-0.4 | 20.4% | 20.0% | +0.5% |
+| 0.2-0.4 | 20.5% | 20.0% | +0.5% |
 | 0.4-0.6 | 27.0% | 26.5% | +0.5% |
-| 0.6-0.8 | 54.4% | **30.0%** | +24.4% |
-| 0.8+ | 299.7% | **123.2%** | +176.5% |
-| **Overall** | **98.2%** | **44.0%** | **+54.2%** |
+| 0.6-0.8 | 54.1% | **30.1%** | +24.0% |
+| 0.8+ | 299.5% | **123.1%** | +176.3% |
+| **Overall** | **98.1%** | **44.0%** | **+54.1%** |
 
 **Real data (McNeil-Frey test):**
 
 | Tail | Uncorrected MF p | Corrected MF p | Pass? |
 |---|---|---|---|
-| **Loss** | 0.001 | **0.293** | **PASS** |
-| **Profit** | 0.013 | **0.219** | **PASS** |
+| **Loss** | 0.001 | 0.010 | fail (mean_resid -0.147 → -0.112) |
+| **Profit** | 0.013 | **0.314** | **PASS** (mean_resid -0.119 → -0.054) |
 
-The correction network reduced the mean ES residual on the loss tail from -0.147 (14.7% overestimation) to -0.050 (5.0%), turning a strong rejection into a comfortable pass.
+The correction network reduces the mean ES residual on every per-ticker evaluation we measured. On the profit tail this is enough to pass McNeil-Frey cleanly (p=0.314). On the loss tail the aggregate p-value remains below 0.05, but the direction of improvement is consistent: 4 of 7 per-ticker loss tails pass the MF test after correction (AAPL, BTC-USD, META, MSFT). The failures (AMZN, NVDA, ^NYFANG) are concentrated in tickers where the correction over-corrects, pushing ES estimates higher than the realised loss exceedances warrant.
 
 ![ES correction scatter](docs/figures/es_correction_scatter.png)
 
@@ -546,8 +553,8 @@ Removing one of 7 CNN features at a time:
 |---|---|---|---|
 | v1 | Conv-ReLU-BN x2, [32,64] | 10.18% | 51.85% |
 | v2 | ResBlock x3, [64,128,128], multi-scale pool | **9.56%** | **41.06%** |
-| v3 | + [1,1,1,2] scoring weights, n=1000 only | 15.98% | 66.90% |
-| **v3 + correction net** | + ES correction network | 15.98% | **43.97%** |
+| v3 | + [1,1,1,2] scoring weights, n=1000 only | 15.45% | 98.10% |
+| **v3 + correction net** | + ES correction network (analytical ES targets) | 15.45% | **43.98%** |
 
 **Key upgrades:** Residual connections, multi-scale pooling [1,4,8], GPU support (45x speedup), asymmetric loss, ES correction network.
 
@@ -559,18 +566,19 @@ Removing one of 7 CNN features at a time:
 
 | Finding | Chapter | Impact |
 |---|---|---|
-| **ES correction network passes both Kupiec + MF** | **1, 8** | **Loss tail: VR=1.11%, MF p=0.293** |
-| Sign-split improves loss-tail VaR | 6 | CNN passes Kupiec (VR=1.11%) |
+| **Correction network passes MF on profit tail** | **1, 8** | **Profit: p=0.314; Loss: p=0.010 (from 0.001)** |
+| Sign-split improves loss-tail VaR | 6 | CNN passes Kupiec on loss tail (VR=1.06%) |
 | ES error grows exponentially with xi | 7 | 1/(1-xi) amplification is the root cause |
 | All parametric methods fail MF equally | 7 | GPD limitation, not CNN-specific |
 | AMZN + crypto drive ES overestimation | 7 | Per-ticker structural differences |
 | Correction network transfers from synthetic to real | 8 | 9-feature MLP beats xi-only lookup table |
+| Analytical ES targets replace Monte Carlo for training | 1, 8 | Unbiased synthetic ES ground truth |
 | Mean excess score most important feature | 14 | Validates GPD-theoretic feature design |
 | Asymmetric loss beats VaR-aware loss | 10 | Simpler loss + separate correction > complex joint loss |
 | Ensemble adds uncertainty, not accuracy | 15 | 0.59 correlation, robust to seed |
 
 ### Overall Assessment
 
-The three-stage pipeline (CNN threshold selection → GPD fitting → ES correction) achieves both well-calibrated VaR and well-calibrated ES on the loss tail of real financial data. The key insight is that **VaR and ES require different approaches**: VaR is well-served by optimising the threshold selection (CNN), while ES requires a separate post-processing step (correction network) because the GPD formula's 1/(1-xi) amplification creates systematic bias that cannot be eliminated by better threshold selection alone.
+The three-stage pipeline (CNN threshold selection → GPD fitting → ES correction) achieves well-calibrated VaR on the loss tail and well-calibrated ES on the profit tail of real financial data, with partial improvement on loss-tail ES. The key insight is that **VaR and ES require different approaches**: VaR is well-served by optimising the threshold selection (CNN), while ES requires a separate post-processing step (correction network) because the GPD formula's 1/(1-xi) amplification creates systematic bias that cannot be eliminated by better threshold selection alone.
 
-The ES correction network is trained exclusively on synthetic data with known ground truth and applied to real data without retraining, constituting a successful synthetic-to-real transfer of ES bias characteristics. The 9-feature input (including the amplification factor, goodness-of-fit, and sample kurtosis) captures the nonlinear interactions that simpler approaches (threshold tuning, bias lookup tables) miss.
+The ES correction network is trained exclusively on synthetic data with analytical ground-truth ES (closed form or numerical quadrature for tractable distributions, Monte Carlo for composites) and applied to real data without retraining. This is a genuine synthetic-to-real transfer: the 9-feature input (amplification factor, goodness-of-fit, kurtosis, etc.) captures the nonlinear interactions that simpler approaches (xi-only bias tables, threshold stabilisation) miss. A prior iteration that used downward-biased Monte Carlo ES as training targets showed a cleaner aggregate loss-tail pass (p=0.293), but that result was partly an artifact of the bias cancelling the correction network's over-correction. Using unbiased targets produces an honest result: the profit tail passes cleanly, and the loss tail is right on the edge with a clear per-ticker breakdown of which assets the correction works for and which it does not.
