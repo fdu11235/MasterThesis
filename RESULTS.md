@@ -165,30 +165,32 @@ Evaluated on 1,680 held-out test samples (n=1000).
 
 | Metric | Value |
 |---|---|
-| VaR Relative RMSE | 15.98% |
-| ES Relative RMSE (uncorrected) | 98.20% |
-| **ES Relative RMSE (with correction net)** | **43.97%** |
+| VaR Relative RMSE | 15.45% |
+| ES Relative RMSE (uncorrected) | 98.10% |
+| **ES Relative RMSE (with correction net)** | **43.98%** |
 | Agreement rate (r=10) | 76.4% |
 
 **Per-distribution breakdown (n=1000):**
 
-| Distribution | VaR Rel RMSE | ES Rel RMSE (uncorrected) |
-|---|---|---|
-| burr12 | 9.51% | 19.10% |
-| lognormal_pareto_mix | 9.61% | 21.58% |
-| frechet | 9.64% | 148.73% |
-| weibull_stretched | 10.58% | 21.15% |
-| dagum | 10.44% | 83.16% |
-| inverse_gamma | 11.05% | 59.23% |
-| lognormal | 12.82% | 20.86% |
-| gamma_pareto_splice | 13.74% | 55.24% |
-| pareto | 14.10% | 37.65% |
-| log_gamma | 14.88% | 107.80% |
-| garch_student_t | 17.73% | 34.31% |
-| student_t | 25.06% | 13.00% |
-| two_pareto | 29.09% | 60.35% |
+| Distribution | VaR Rel RMSE | ES Rel RMSE (uncorrected) | ES Rel RMSE (corrected) |
+|---|---|---|---|
+| burr12 | 9.51% | 31.09% | **17.95%** |
+| lognormal_pareto_mix | 9.61% | 21.58% | **20.64%** |
+| frechet | 9.64% | 54.52% | **27.37%** |
+| dagum | 10.44% | 23.88% | **14.98%** |
+| weibull_stretched | 10.58% | 24.34% | **17.19%** |
+| inverse_gamma | 11.05% | 37.82% | **27.51%** |
+| lognormal | 12.85% | 126.64% | **53.42%** |
+| pareto | 14.10% | 68.11% | **33.94%** |
+| log_gamma | 16.07% | 118.82% | **52.12%** |
+| garch_student_t | 17.73% | 34.34% | **22.84%** |
+| gamma_pareto_splice | 18.04% | 206.11% | **89.76%** |
+| two_pareto | 22.17% | 164.55% | **67.23%** |
+| student_t | 25.06% | 13.00% | 21.04% |
 
-The high uncorrected ES RMSE (98%) motivated the investigation into ES estimation that led to the correction network.
+The correction network reduces ES RMSE on 12 of 13 distributions. The only exception is Student-t, where the light tail (xi ≈ 0.2-0.33) already has low uncorrected ES error (13%) and the correction tends to over-correct. Biggest gains are on very heavy tails (gamma_pareto_splice, two_pareto, lognormal, log_gamma), where uncorrected ES can exceed 100% but the corrected version stays under 90%.
+
+The high overall uncorrected ES RMSE (98%) motivated the investigation into ES estimation that led to the correction network.
 
 ![Quantile RMSE by distribution](docs/figures/syn_quantile_rmse_by_dist.png)
 
