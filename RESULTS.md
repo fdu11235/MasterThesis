@@ -330,6 +330,35 @@ The four standard equities pass MF individually. AMZN and crypto drive the aggre
 
 The synthetic training data (median xi=0.34) sits in the safe zone of the ES formula, while real data (median xi=0.50) sits in the transition zone. This explains why the CNN performs well on synthetic evaluation but ES fails on real data.
 
+### Resolution: Unified `pot_es` with Trimmed-Mean Fallback
+
+The estimator-level fix that recovered the bulk of the synthetic ES Rel RMSE.
+
+**Original behaviour.** The codebase had two ES functions: `pot_es` (closed-form) and `pot_es_stable` (closed-form for ξ̂ ≤ 0.7, raw empirical tail mean for ξ̂ > 0.7). The empirical-mean fallback was meant to avoid the closed-form's $1/(1-\xi)$ blowup, but for α<2 Pareto tails with the ~10 samples that exceed VaR(0.99) in a 1000-sample dataset, the empirical mean is dominated by a single outlier. One synthetic test cell (`lognormal_pareto_mix` α=1.5, ξ̂=0.74) produced ES_pot = 712.3 vs true ES = 20.9 — a 33× overshoot driven entirely by one tail draw.
+
+**The fix.** Replace the empirical-mean fallback with a 1-step trimmed mean (drop the single largest tail sample), and unify the two functions so the change applies everywhere — feature extraction, training targets, real-data evaluation:
+
+```python
+def pot_es(sorted_desc, k, xi, beta, n, p):
+    var_est = pot_quantile(...)
+    if xi <= 0.7:
+        # closed-form: (VaR + beta - xi*u) / max(1-xi, 0.05)
+        ...
+    # robust fallback for xi > 0.7
+    tail = sorted_desc[sorted_desc > var_est]
+    if len(tail) >= 5:
+        return float(np.sort(tail)[:-1].mean())  # drop top 1
+    if len(tail) >= 2:
+        return float(tail.mean())
+    return var_est + beta
+```
+
+**Why a trimmed mean and not Hill?** A Hill estimator $\hat{\alpha}_H = m / \sum \log(X_{(i)}/\text{VaR})$ is theoretically cleaner for power-law tails, but empirically inferior at the m≈10 sample size we work with: simulated comparison on Pareto(α=1.5) with m=10 gives Hill std=17.2 vs trimmed-mean std≈2.5, and Hill diverges as α → 1 because of the $\alpha/(\alpha-1)$ factor. The trimmed mean has higher bias (downward) but much lower variance and no singularity at α=1.
+
+**Impact.** Synthetic uncorrected ES Rel RMSE drops from 104.5% to 35.4% with no other change (no CNN retrain). Per-distribution: `lognormal_pareto_mix` 295% → 27%, `frechet` 128% → 18%, `lognormal` 45% → 20%, `gamma_pareto_splice` 66% → 32%. The xi ≥ 0.8 bin drops from 274% → 66% uncorrected RMSE.
+
+**Limitation.** The fix doesn't help the `two_pareto` α₂ ∈ {1.05, 1.1} cells (RMSE stays at 72%). Those have theoretical ξ ≈ 0.91-0.95 — the GPD estimator's variance is unbounded in this regime, and no estimator that combines ~10 tail samples can reliably reconstruct $\alpha/(\alpha-1) \approx 11-21$.
+
 ---
 
 ## 8. Solving ES: The Correction Network
@@ -376,12 +405,14 @@ A small MLP (865 parameters) that predicts a correction factor from 9 scalar fea
 
 | Xi bin | Uncorrected | Corrected | Improvement |
 |---|---|---|---|
-| 0-0.2 | 19.3% | 16.6% | +2.7% |
-| 0.2-0.4 | 20.5% | 20.0% | +0.5% |
-| 0.4-0.6 | 27.0% | 26.5% | +0.5% |
-| 0.6-0.8 | 54.1% | **30.1%** | +24.0% |
-| 0.8+ | 299.5% | **123.1%** | +176.3% |
-| **Overall** | **98.1%** | **44.0%** | **+54.1%** |
+| 0-0.2 | 18.0% | 15.3% | +2.7% |
+| 0.2-0.4 | 21.0% | 19.3% | +1.7% |
+| 0.4-0.6 | 27.4% | 26.1% | +1.3% |
+| 0.6-0.8 | 43.9% | 45.8% | -1.9% |
+| 0.8+ | 66.2% | 88.9% | -22.7% |
+| **Overall** | **35.4%** | **40.3%** | **-4.9%** |
+
+The correction network's per-bin contribution is small or negative under the unified `pot_es` estimator: it improves on the lighter tails (ξ < 0.6) but slightly hurts on the heavier ones (ξ ≥ 0.6), where the trimmed-mean fallback is itself near the statistical limit and the network's policy adds noise. The headline reduction came from the estimator change in §7, not from the correction network. The correction network still helps real-data backtests (see below) because real-data feature distributions differ from synthetic.
 
 **Real data (McNeil-Frey test):**
 
