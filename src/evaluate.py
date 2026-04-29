@@ -9,7 +9,11 @@ import matplotlib.pyplot as plt
 from scipy import stats
 
 from scipy.stats import genpareto, norm
-from scipy.special import gamma as gamma_fn, beta as beta_fn, betainc, gammainc, gammaincc
+from scipy.special import (
+    gamma as gamma_fn, beta as beta_fn,
+    betainc, gammainc, gammaincc, gammaincinv,
+)
+from scipy.optimize import brentq
 
 from src.synthetic import (
     _generate_student_t, _generate_pareto,
@@ -108,34 +112,51 @@ def pot_quantile(sorted_desc, k, xi, beta, n, p):
 
 
 def pot_es(sorted_desc, k, xi, beta, n, p):
-    """GPD closed-form Expected Shortfall.
+    """POT Expected Shortfall with robust fallback for high xi.
 
-    ES(p) = (VaR(p) + beta - xi * u) / (1 - xi)   if xi != 0
-    ES(p) = VaR(p) + beta                           if xi ~ 0
+    For xi <= 0.7, uses the GPD closed-form:
+        ES(p) = (VaR(p) + beta - xi * u) / (1 - xi)   if xi != 0
+        ES(p) = VaR(p) + beta                           if xi ~ 0
+
+    For xi > 0.7, where the 1/(1-xi) amplification makes the closed-form
+    unreliable, falls back to a 1-step trimmed mean of tail samples
+    (drop the single largest) to guard against single-sample outliers
+    in infinite-variance Pareto tails.
+
+    The trimmed mean is preferred over raw empirical mean (which can be
+    dominated by one outlier in a ~10-sample tail of an alpha<2 Pareto)
+    and over the Hill estimator (which has very high variance at
+    realistic m and diverges as alpha approaches 1).
     """
     var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
-    u = sorted_desc[k]
-    if abs(xi) < 1e-8:
-        return var_est + beta
-    one_minus_xi = max(1 - xi, 0.05)  # stability clamp (mirrors diff_pot.py:130)
-    return (var_est + beta - xi * u) / one_minus_xi
+
+    if xi <= 0.7:
+        # GPD closed-form
+        u = sorted_desc[k]
+        if abs(xi) < 1e-8:
+            return var_est + beta
+        one_minus_xi = max(1 - xi, 0.05)  # stability clamp
+        return (var_est + beta - xi * u) / one_minus_xi
+
+    # Robust fallback: trimmed mean of tail samples
+    tail = sorted_desc[sorted_desc > var_est]
+    m = len(tail)
+    if m < 2:
+        return var_est + beta  # exponential tail fallback
+    if m < 5:
+        return float(tail.mean())  # too few samples to trim safely
+    tail_sorted = np.sort(tail)[:-1]  # drop the single largest sample
+    return float(tail_sorted.mean())
 
 
 def pot_es_stable(sorted_desc, k, xi, beta, n, p):
-    """Expected Shortfall with semi-parametric fallback for high xi.
+    """Backwards-compatible alias for :func:`pot_es`.
 
-    When xi > 0.7, the closed-form ES formula has 1/(1-xi) which amplifies
-    errors dramatically. Falls back to the empirical mean of observations
-    exceeding VaR (a legitimate Hill-type ES estimator).
+    The robust fallback for high xi is now built into ``pot_es`` directly,
+    so this function exists only to preserve callers that imported the
+    older name. New code should call ``pot_es``.
     """
-    var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
-    if xi <= 0.7:
-        return pot_es(sorted_desc, k, xi, beta, n, p)
-    # Semi-parametric: mean of observations exceeding VaR
-    tail = sorted_desc[sorted_desc > var_est]
-    if len(tail) >= 2:
-        return float(tail.mean())
-    return var_est + beta  # exponential tail fallback
+    return pot_es(sorted_desc, k, xi, beta, n, p)
 
 
 def _resolve_garch_type(dist_type, dist_params):
@@ -179,16 +200,46 @@ def true_quantile(dist_type, dist_params, p):
         return stats.lognorm.ppf(p, s=dist_params['sigma'])
     elif dist_type == 'weibull_stretched':
         return stats.weibull_min.ppf(p, c=dist_params['c'])
-    elif dist_type in ('lognormal_pareto_mix', 'two_pareto',
-                        'log_gamma', 'gamma_pareto_splice'):
-        _load_cache()
-        key = _params_key(dist_type, dist_params, p)
-        if key not in _mc_quantile_cache:
-            logger.info("Computing MC quantile for %s (p=%s) ...", dist_type, p)
-            _mc_quantile_cache[key] = _mc_quantile(dist_type, dist_params, p)
-            _save_cache()
-        return _mc_quantile_cache[key]
+    elif dist_type == 'two_pareto':
+        a1, a2 = dist_params['alpha1'], dist_params['alpha2']
+        cp = dist_params['changepoint_frac']
+        if p < 1.0 - cp:
+            return _mc_quantile_fallback(dist_type, dist_params, p)
+        u = (1.0 / cp) ** (1.0 / a1)
+        return float(u * (cp / (1.0 - p)) ** (1.0 / a2))
+    elif dist_type == 'gamma_pareto_splice':
+        a = dist_params['pareto_alpha']
+        sq = dist_params['splice_quantile']
+        if p < sq:
+            return _mc_quantile_fallback(dist_type, dist_params, p)
+        u = stats.gamma.ppf(sq, a=dist_params['gamma_shape'])
+        return float(u * ((1.0 - sq) / (1.0 - p)) ** (1.0 / a))
+    elif dist_type == 'log_gamma':
+        b, p_param = dist_params['b'], dist_params['p']
+        return float(np.exp(gammaincinv(p_param, p) / b))
+    elif dist_type == 'lognormal_pareto_mix':
+        mu = dist_params['lognormal_mu']
+        sig = dist_params['lognormal_sigma']
+        a = dist_params['pareto_alpha']
+        w = dist_params['mix_frac']
+        F = lambda x: ((1.0 - w) * stats.lognorm.cdf(x, s=sig, scale=np.exp(mu))
+                       + w * stats.pareto.cdf(x, b=a))
+        return float(brentq(lambda x: F(x) - p, 1.0, 1e10))
     raise ValueError(f"Unknown dist_type: {dist_type}")
+
+
+def _mc_quantile_fallback(dist_type, dist_params, p):
+    """MC quantile fallback for composites at probability levels below the
+    splice/changepoint, where no closed form exists. Used only at p < 1-cp
+    for two_pareto and p < splice_q for gamma_pareto_splice — never
+    triggered at the eval p ∈ {0.95, 0.975, 0.99} given default config."""
+    _load_cache()
+    key = _params_key(dist_type, dist_params, p)
+    if key not in _mc_quantile_cache:
+        logger.info("Computing MC quantile for %s (p=%s) ...", dist_type, p)
+        _mc_quantile_cache[key] = _mc_quantile(dist_type, dist_params, p)
+        _save_cache()
+    return _mc_quantile_cache[key]
 
 
 def _mc_es(dist_type, dist_params, p, n_mc=10_000_000, seed=99999):
@@ -285,28 +336,84 @@ def _analytical_es(dist_type, dist_params, p):
         s = 1.0 + 1.0 / c
         return float(gamma_fn(s) * gammaincc(s, -np.log(1.0 - p)) / (1.0 - p))
 
+    if dist_type == 'two_pareto':
+        # Population threshold u = Pareto(alpha1) quantile at 1-cp.
+        # Above u, distribution is pure Pareto(alpha2) starting at u.
+        # Valid for p >= 1 - cp; ES finite only when alpha2 > 1.
+        a1 = dist_params['alpha1']
+        a2 = dist_params['alpha2']
+        cp = dist_params['changepoint_frac']
+        if a2 <= 1 or p < 1.0 - cp:
+            return None
+        u = (1.0 / cp) ** (1.0 / a1)
+        var = u * (cp / (1.0 - p)) ** (1.0 / a2)
+        return float(a2 / (a2 - 1.0) * var)
+
+    if dist_type == 'gamma_pareto_splice':
+        # Population threshold u = Gamma(gamma_shape) quantile at splice_q.
+        # Above u, distribution is pure Pareto(pareto_alpha) starting at u.
+        g = dist_params['gamma_shape']
+        a = dist_params['pareto_alpha']
+        sq = dist_params['splice_quantile']
+        if a <= 1 or p < sq:
+            return None
+        u = stats.gamma.ppf(sq, a=g)
+        var = u * ((1.0 - sq) / (1.0 - p)) ** (1.0 / a)
+        return float(a / (a - 1.0) * var)
+
+    if dist_type == 'log_gamma':
+        # X = exp(Y), Y ~ Gamma(shape=p_param, scale=1/b). Tail integral
+        # via substitution u = log x reduces to upper incomplete gamma.
+        # Requires b > 1 for finite mean.
+        b = dist_params['b']
+        p_param = dist_params['p']
+        if b <= 1:
+            return None
+        q_y = gammaincinv(p_param, p) / b  # equals log(VaR)
+        return float((b / (b - 1.0)) ** p_param
+                     * gammaincc(p_param, (b - 1.0) * q_y) / (1.0 - p))
+
+    if dist_type == 'lognormal_pareto_mix':
+        # Bernoulli mixture: F = (1-w) F_LN + w F_Par. VaR via brentq;
+        # ES decomposes by linearity into closed-form pieces.
+        mu = dist_params['lognormal_mu']
+        sig = dist_params['lognormal_sigma']
+        a = dist_params['pareto_alpha']
+        w = dist_params['mix_frac']
+        if a <= 1:
+            return None
+        F = lambda x: ((1.0 - w) * stats.lognorm.cdf(x, s=sig, scale=np.exp(mu))
+                       + w * stats.pareto.cdf(x, b=a))
+        var = brentq(lambda x: F(x) - p, 1.0, 1e10)
+        num_ln = ((1.0 - w) * np.exp(mu + 0.5 * sig * sig)
+                  * norm.cdf((mu + sig * sig - np.log(var)) / sig))
+        num_par = w * (a / (a - 1.0)) * var ** (1.0 - a)
+        return float((num_ln + num_par) / (1.0 - p))
+
     return None
 
 
 def true_es(dist_type, dist_params, p):
     """True Expected Shortfall: E[X | X > VaR(p)].
 
-    Uses a closed-form / numerically integrated value where available,
-    falling back to Monte Carlo (10M samples) for composite distributions.
-    Both paths are cached by (dist_type, params, p), with persistence to
-    ``outputs/data/mc_es_cache.pkl`` so results are reused across runs.
+    Closed-form values are returned directly without consulting the
+    Monte Carlo cache, so previously cached MC values do not override
+    the deterministic analytical result. The MC path is reserved as
+    a fallback for pathological cases (e.g. infinite ES when a Pareto
+    tail has shape <= 1) and persists to ``outputs/data/mc_es_cache.pkl``.
     """
     dist_type, dist_params = _resolve_garch_type(dist_type, dist_params)
+    val = _analytical_es(dist_type, dist_params, p)
+    if val is not None:
+        return float(val)
+
+    # MC fallback (cached on disk)
     _load_cache()
     key = _params_key(dist_type, dist_params, p)
     if key in _mc_es_cache:
         return _mc_es_cache[key]
-
-    val = _analytical_es(dist_type, dist_params, p)
-    if val is None:
-        logger.info("Computing MC ES for %s (p=%s) ...", dist_type, p)
-        val = _mc_es(dist_type, dist_params, p)
-    _mc_es_cache[key] = float(val)
+    logger.info("Computing MC ES for %s (p=%s) ...", dist_type, p)
+    _mc_es_cache[key] = float(_mc_es(dist_type, dist_params, p))
     _save_cache()
     return _mc_es_cache[key]
 

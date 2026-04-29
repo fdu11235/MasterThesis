@@ -4,7 +4,7 @@ features:
 
 synthetic:
   sample_sizes: [1000]
-  n_replications: 200
+  n_replications: 300
   seed: 42
   distributions:
     student_t:
@@ -18,7 +18,7 @@ synthetic:
       mix_frac: 0.1
     two_pareto:
       alpha1: [2.0, 3.0]
-      alpha2: [1.0, 1.5]
+      alpha2: [1.05, 1.1, 1.5]   # alpha2=1.0 dropped: ES = +inf at p=0.99
       changepoint_frac: 0.05
     burr12:
       c: [2, 5]
