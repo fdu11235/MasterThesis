@@ -1,0 +1,73 @@
+# High tail-index stress experiment.
+#
+# Clean single-family Pareto data at alpha in {1.2, 1.3, 1.4}
+# (xi = 1/alpha = 0.833, 0.769, 0.714) — the xi > 0.7 regime where the
+# network-determined xi produces unreliable Expected Shortfall.
+#
+# Run with: python run_high_xi_experiment.py --config config/high_xi.yaml
+#
+# The pot / model / evaluate / es_correction blocks are copied verbatim from
+# config/default.yaml — the model block MUST match the trained checkpoint
+# outputs/checkpoints/model_regression.pt or load_state_dict fails.
+
+features:
+  columns: [0, 1, 2, 3, 4, 5, 6]   # 0=xi_hat, 1=beta_hat, 2=AD_GOF, 3=mean_excess_score, 4=hill, 5=qq_resid, 6=me_values
+  tag: "high_xi"
+
+synthetic:
+  sample_sizes: [1000, 2000, 5000]   # show n-dependence of the failure
+  n_replications: 300
+  seed: 20260516                     # disjoint from default.yaml seed 42
+  distributions:
+    pareto:
+      alpha: [1.2, 1.3, 1.4]         # only Pareto, only high-xi alphas
+
+pot:
+  k_min: 30
+  k_max_frac: 0.15
+  delta: 5
+  weights: [1.0, 1.0, 1.0, 2.0]  # stability, GoF, penalty, mean_excess
+  decluster: true
+  decluster_run_length: 10
+
+model:
+  task: regression
+  channels: [64, 128, 128]
+  kernel_size: 5
+  dropout: 0.2
+  pool_sizes: [1, 4, 8]
+  lr: 0.0005
+  batch_size: 64
+  max_epochs: 500
+  patience: 30
+  loss_type: "asymmetric"
+  asymmetric_weight: 2.0
+  loss_alpha: 1.0
+  loss_beta: 0.5
+  loss_gamma: 0.3
+
+evaluate:
+  agreement_radii: [5, 10]
+  quantile_p: 0.99
+  test_fraction: 0.2
+
+es_correction:
+  enabled: true
+  hidden: 32
+  lr: 0.001
+  batch_size: 64
+  max_epochs: 200
+  patience: 20
+  val_fraction: 0.2
+  seed: 42
+  correction_clip: [0.1, 5.0]
+  output_lo: 0.5
+  output_hi: 3.0
+  output_mode: "softplus"
+  nan_replace: 20.0
+  amplification_clamp: 0.05
+
+high_xi_experiment:
+  oracle_target: "es"                # minimise |ES(k) - ES_true| over k_grid
+  cnn_checkpoint: "outputs/checkpoints/model_regression.pt"
+  es_correction_checkpoint: "outputs/checkpoints/es_correction_net.pt"

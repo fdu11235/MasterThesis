@@ -112,41 +112,41 @@ def pot_quantile(sorted_desc, k, xi, beta, n, p):
 
 
 def pot_es(sorted_desc, k, xi, beta, n, p):
-    """POT Expected Shortfall with robust fallback for high xi.
+    """POT Expected Shortfall with a robust fallback for high xi.
 
     For xi <= 0.7, uses the GPD closed-form:
         ES(p) = (VaR(p) + beta - xi * u) / (1 - xi)   if xi != 0
         ES(p) = VaR(p) + beta                           if xi ~ 0
 
-    For xi > 0.7, where the 1/(1-xi) amplification makes the closed-form
-    unreliable, falls back to a 1-step trimmed mean of tail samples
-    (drop the single largest) to guard against single-sample outliers
-    in infinite-variance Pareto tails.
-
-    The trimmed mean is preferred over raw empirical mean (which can be
-    dominated by one outlier in a ~10-sample tail of an alpha<2 Pareto)
-    and over the Hill estimator (which has very high variance at
-    realistic m and diverges as alpha approaches 1).
+    For xi > 0.7 the closed form is unreliable: the GPD-MLE shape is
+    upward-biased in small heavy-tailed samples and the 1/(1-xi)
+    amplification is sensitive to it. A parametric tail model cannot be
+    safely extrapolated in this regime either, because light tails and
+    near-unit-index power tails are not distinguishable at the sample
+    sizes available (the lognormal-versus-power-law identifiability
+    problem). ES is therefore estimated non-parametrically as the
+    empirical mean of the observations exceeding the estimated VaR. This
+    estimator is mean-unbiased for any distribution with a finite tail
+    expectation and never blows up. Its limitation is a higher variance
+    and a downward median bias for tails with index near one.
+    See docs/high_xi_es_investigation.md for the supporting analysis.
     """
     var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
+    u = sorted_desc[k]
 
     if xi <= 0.7:
         # GPD closed-form
-        u = sorted_desc[k]
         if abs(xi) < 1e-8:
             return var_est + beta
         one_minus_xi = max(1 - xi, 0.05)  # stability clamp
         return (var_est + beta - xi * u) / one_minus_xi
 
-    # Robust fallback: trimmed mean of tail samples
+    # High-xi regime: robust empirical tail mean. All exceedances are kept
+    # (the largest is not dropped), so the estimate is mean-unbiased.
     tail = sorted_desc[sorted_desc > var_est]
-    m = len(tail)
-    if m < 2:
-        return var_est + beta  # exponential tail fallback
-    if m < 5:
-        return float(tail.mean())  # too few samples to trim safely
-    tail_sorted = np.sort(tail)[:-1]  # drop the single largest sample
-    return float(tail_sorted.mean())
+    if len(tail) < 2:
+        return var_est + beta  # too few exceedances, exponential-tail estimate
+    return float(tail.mean())
 
 
 def pot_es_stable(sorted_desc, k, xi, beta, n, p):
