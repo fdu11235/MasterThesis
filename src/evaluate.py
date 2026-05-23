@@ -119,34 +119,33 @@ def pot_es(sorted_desc, k, xi, beta, n, p):
         ES(p) = VaR(p) + beta                           if xi ~ 0
 
     For xi > 0.7 the closed form is unreliable: the GPD-MLE shape is
-    upward-biased in small heavy-tailed samples and the 1/(1-xi)
-    amplification is sensitive to it. A parametric tail model cannot be
-    safely extrapolated in this regime either, because light tails and
-    near-unit-index power tails are not distinguishable at the sample
-    sizes available (the lognormal-versus-power-law identifiability
-    problem). ES is therefore estimated non-parametrically as the
-    empirical mean of the observations exceeding the estimated VaR. This
-    estimator is mean-unbiased for any distribution with a finite tail
-    expectation and never blows up. Its limitation is a higher variance
-    and a downward median bias for tails with index near one.
+    upward-biased in small heavy-tailed samples, and a parametric tail
+    model cannot be safely extrapolated in this regime either, because
+    light tails and near-unit-index power tails are not distinguishable
+    at the sample sizes available (the lognormal-versus-power-law
+    identifiability problem). ES is then estimated by historical
+    simulation, the mean of the largest ceil(n*(1-p)) observations. The
+    threshold is the empirical (1-p) quantile, not the POT VaR, which is
+    itself biased high in this regime. The estimator is mean-unbiased for
+    any distribution with a finite tail expectation, bounded by the data,
+    and never empty. Its limitation is a high variance, because the tail
+    has only about ceil(n*(1-p)) observations.
     See docs/high_xi_es_investigation.md for the supporting analysis.
     """
-    var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
-    u = sorted_desc[k]
-
     if xi <= 0.7:
         # GPD closed-form
+        var_est = pot_quantile(sorted_desc, k, xi, beta, n, p)
+        u = sorted_desc[k]
         if abs(xi) < 1e-8:
             return var_est + beta
         one_minus_xi = max(1 - xi, 0.05)  # stability clamp
         return (var_est + beta - xi * u) / one_minus_xi
 
-    # High-xi regime: robust empirical tail mean. All exceedances are kept
-    # (the largest is not dropped), so the estimate is mean-unbiased.
-    tail = sorted_desc[sorted_desc > var_est]
-    if len(tail) < 2:
-        return var_est + beta  # too few exceedances, exponential-tail estimate
-    return float(tail.mean())
+    # High-xi regime: historical-simulation ES, the mean of the largest
+    # ceil(n*(1-p)) observations.
+    n_eff = len(sorted_desc)
+    m = min(max(int(np.ceil(n_eff * (1.0 - p))), 1), n_eff)
+    return float(np.mean(sorted_desc[:m]))
 
 
 def pot_es_stable(sorted_desc, k, xi, beta, n, p):

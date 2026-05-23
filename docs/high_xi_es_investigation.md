@@ -107,30 +107,45 @@ an unusually large maximum gave an ES estimate of 51.4 against a true 20.0,
 a +157 percent error. RMSE squares such cases, which pushed `frechet` to
 128.0 percent and `lognormal_pareto_mix` to 295.3 percent.
 
-The original fallback dropped the single largest exceedance. That step was
-not a bias mistake. It is variance reduction, removing the dominant outlier
-from a 10-point mean.
+A second cause was the threshold. The tail was defined as the observations
+above `var_est`, the POT VaR. For xi-hat>0.7 `var_est` is computed with the
+upward-biased GPD shape, so it sits above the true VaR. In one frechet
+sample `var_est` was 11.0 when the true VaR was about 10.0. Conditioning the
+tail mean on a threshold that is too high biases the estimate upward.
 
-## 6. Decision and the deployed estimator
+## 6. The threshold fix and the deployed estimator
+
+The threshold problem is removed by defining the tail with the empirical
+(1-p) quantile instead of the POT VaR. ES becomes the historical-simulation
+ES, the mean of the largest ceil(n(1-p)) observations. This does not depend
+on the inflated `var_est`, is bounded by the data, and is never empty.
+
+Re-running the synthetic pipeline with this estimator brought the aggregate
+ES relative RMSE to 56.6 percent, down from 85.4 percent. `frechet` fell
+from 128.0 to 92.9 percent and `lognormal_pareto_mix` from 295.3 to 134.0
+percent. The light-tailed families did not regress.
 
 Summary of the options on the same synthetic set:
 
 | xi-hat>0.7 estimator | aggregate ES RelRMSE |
 |---|---|
 | Trimmed empirical mean (drop largest) | ~35% |
-| Plain empirical mean | 85% |
+| Plain empirical mean above the POT VaR | 85% |
+| Historical-simulation ES (mean of top ceil(n(1-p))) | 57% |
 | Hill/Weissman | 117% |
 
 With only about 10 tail observations there is no estimator that is both
 unbiased and low variance. The trimmed mean has the lowest RMSE but it is
-biased low, which underestimates a risk measure. The plain empirical mean is
-mean-unbiased but noisy.
+biased low, which underestimates a risk measure.
 
-Decision: the deployed `pot_es` uses the plain empirical tail mean for
-xi-hat>0.7. The estimator is mean-unbiased, which is preferred for a risk
-measure over the lower-RMSE but downward-biased trimmed mean. Its limitation
-is a high variance for individual windows, because the tail has only about
-ten observations. For xi-hat<=0.7 the GPD closed form is unchanged.
+Decision: the deployed `pot_es` uses the historical-simulation ES for
+xi-hat>0.7. It is mean-unbiased, which is preferred for a risk measure over
+the lower-RMSE but downward-biased trimmed mean. Its limitation is a high
+variance for individual windows, because the tail has only about
+ceil(n(1-p)) observations. For genuine heavy Pareto tails it underestimates
+ES, by a median of 34 to 56 percent at n = 1000 for alpha in {1.2, 1.3,
+1.4}, which is the irreducible small-sample difficulty. For xi-hat<=0.7 the
+GPD closed form is unchanged.
 
 The ES correction network is left disabled. It cannot help here for the same
 identifiability reason, and on synthetic data it previously made the
@@ -155,9 +170,10 @@ problem.
 
 ## 8. Outcome
 
-The deployed estimator is the plain empirical tail mean for xi-hat>0.7 and
+The deployed estimator is the historical-simulation ES for xi-hat>0.7 and
 the GPD closed form for xi-hat<=0.7. The investigation is documented in the
 thesis as Appendix B. The broader finding is that ES estimation for genuine
-xi>0.7 tails at n approx 1000 has an irreducible difficulty. The closed form,
-the Hill/Weissman estimator, and the empirical tail mean each fail in a
-different way, and no method reliably distinguishes the cases.
+xi>0.7 tails at n approx 1000 has an irreducible difficulty. The closed form
+overestimates, the Hill/Weissman estimator fails on light tails, and the
+empirical tail mean is mean-unbiased but high-variance. No method reliably
+distinguishes the cases.
