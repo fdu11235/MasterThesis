@@ -26,7 +26,7 @@ pot:
   k_min: 30
   k_max_frac: 0.15
   delta: 5
-  weights: [1.0, 1.0, 1.0, 2.0]  # stability, GoF, penalty, mean_excess
+  weights: [1.0, 1.0, 1.0, 2.0, 2.0]  # stability, GoF, penalty, mean_excess, heavy_tail
   decluster: true
   decluster_run_length: 10
 
@@ -40,7 +40,7 @@ model:
   batch_size: 64
   max_epochs: 500
   patience: 30
-  loss_type: "asymmetric"
+  loss_type: "smooth_l1"
   asymmetric_weight: 2.0
   loss_alpha: 1.0
   loss_beta: 0.5

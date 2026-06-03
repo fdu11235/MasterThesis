@@ -17,6 +17,10 @@ import pickle
 import numpy as np
 import yaml
 
+# Make `src` importable when this script is launched from a subfolder.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from src.evaluate import pot_quantile, pot_es, true_quantile, true_es
 
 logger = logging.getLogger(__name__)

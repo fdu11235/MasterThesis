@@ -2,10 +2,10 @@
 # Run all pipelines end-to-end. Intended for overnight execution.
 #
 # Usage:
-#   nohup bash run_all_overnight.sh > logs/overnight.log 2>&1 &
+#   nohup bash run_all.sh > logs/overnight.log 2>&1 &
 #
 # Or in a tmux/screen session:
-#   bash run_all_overnight.sh 2>&1 | tee logs/overnight.log
+#   bash run_all.sh 2>&1 | tee logs/overnight.log
 
 set -e  # stop on first error
 cd "$(dirname "$0")"

@@ -18,6 +18,10 @@ import torch
 import yaml
 from scipy.stats import ttest_1samp
 
+# Make `src` importable when this script is launched from a subfolder.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from src.es_correction import (
     ESCorrectionNet, build_correction_dataset, train_correction_net,
     extract_features, apply_correction,

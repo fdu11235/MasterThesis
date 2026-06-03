@@ -23,7 +23,7 @@ fi
 
 # Step 2: ES correction network retrain
 echo "[CHAIN $(date -Is)] starting run_es_correction_net.py" >> "$LOG"
-python run_es_correction_net.py --config config/default.yaml \
+python experiments/run_es_correction_net.py --config config/default.yaml \
     > logs/run_es_correction_strict.log 2>&1
 EX1=$?
 echo "[CHAIN $(date -Is)] run_es_correction_net.py exited $EX1" >> "$LOG"

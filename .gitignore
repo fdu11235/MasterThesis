@@ -215,3 +215,6 @@ plans/
 
 #latex
 latex/
+
+# Reference PDFs (papers, evaluation criteria) - keep local, never push
+docs/*.pdf

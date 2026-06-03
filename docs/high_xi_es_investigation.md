@@ -10,10 +10,10 @@ This document is the technical record. The thesis version is Appendix B
 Reproduce with:
 
 ```bash
-python run_high_xi_experiment.py --config config/high_xi.yaml   # stress experiment
-python run_xi_es_analysis.py --config config/default.yaml        # full-set residual bias
-python investigate_two_pareto.py --config config/default.yaml    # composite tails
-python run_pipeline.py --config config/default.yaml              # full synthetic eval
+python experiments/run_high_xi_experiment.py --config config/high_xi.yaml   # stress experiment
+python experiments/run_xi_es_analysis.py --config config/default.yaml       # full-set residual bias
+python experiments/investigate_two_pareto.py --config config/default.yaml   # composite tails
+python run_pipeline.py --config config/default.yaml                         # full synthetic eval
 ```
 
 ## 1. Motivation

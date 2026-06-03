@@ -168,6 +168,41 @@ def score_penalty(k_grid: NDArray) -> NDArray:
     return 1.0 / np.sqrt(k_grid.astype(float))
 
 
+def score_heavy_tail_penalty(hill_series: NDArray, k_grid: NDArray) -> NDArray:
+    """Penalize large k when the sample's tail is heavy.
+
+    Returns 0 everywhere when the sample's robust Hill estimate is below
+    a light/heavy threshold of 0.5, so light tails are unaffected. When
+    the robust Hill estimate is above 0.5, the term grows linearly with
+    k normalised to the k_grid range, pulling the scorer's argmin toward
+    smaller k on heavy-tailed samples.
+
+    xi_robust is the median Hill estimate over the middle 50% of the
+    k_grid, which is insensitive to either extreme of the threshold
+    range.
+    """
+    hill = np.asarray(hill_series, dtype=float)
+    k = np.asarray(k_grid, dtype=float)
+
+    n_k = len(hill)
+    if n_k < 4:
+        return np.zeros(n_k, dtype=float)
+
+    mid_lo = n_k // 4
+    mid_hi = max(mid_lo + 1, 3 * n_k // 4)
+    xi_robust = np.nanmedian(hill[mid_lo:mid_hi])
+
+    if not np.isfinite(xi_robust) or xi_robust < 0.5:
+        return np.zeros(n_k, dtype=float)
+
+    k_min = k.min()
+    k_max = k.max()
+    if k_max <= k_min:
+        return np.zeros(n_k, dtype=float)
+
+    return (xi_robust - 0.5) * (k - k_min) / (k_max - k_min)
+
+
 def _min_max_normalize(s: NDArray) -> NDArray:
     """Min-max normalize an array to [0, 1]."""
     return (s - s.min()) / (s.max() - s.min() + 1e-10)
@@ -240,7 +275,13 @@ def compute_baseline_k_star(
     sorted_desc : array, sample sorted in descending order
     k_grid : candidate k values
     delta : half-window size for stability scoring
-    weights : (w_stability, w_gof, w_penalty) or (w_stability, w_gof, w_penalty, w_mean_excess)
+    weights : (w_stability, w_gof, w_penalty)
+              or (w_stability, w_gof, w_penalty, w_mean_excess)
+              or (w_stability, w_gof, w_penalty, w_mean_excess, w_heavy_tail).
+              If w_heavy_tail is present, a tail-heaviness-conditional
+              penalty is added that pulls the argmin toward smaller k on
+              heavy-tailed samples (median Hill > 0.5 over the middle of
+              the k_grid). Light tails are unaffected.
 
     Returns
     -------
@@ -255,16 +296,21 @@ def compute_baseline_k_star(
     s_gof = score_gof(sorted_desc, k_grid, params)
     s_me = score_mean_excess(sorted_desc, k_grid)
     s_pen = score_penalty(k_grid)
+    hill_series = hill_estimator(sorted_desc, k_grid)
+    s_heavy = score_heavy_tail_penalty(hill_series, k_grid)
 
     # Min-max normalize each score to [0, 1]
     s_stab_n = _min_max_normalize(s_stab)
     s_gof_n = _min_max_normalize(s_gof)
     s_pen_n = _min_max_normalize(s_pen)
     s_me_n = _min_max_normalize(s_me)
+    s_heavy_n = _min_max_normalize(s_heavy)  # all-zero input stays all-zero
 
     w_stab, w_gof, w_pen = weights[0], weights[1], weights[2]
     w_me = weights[3] if len(weights) > 3 else 0.0
-    total = w_stab * s_stab_n + w_gof * s_gof_n + w_pen * s_pen_n + w_me * s_me_n
+    w_heavy = weights[4] if len(weights) > 4 else 0.0
+    total = (w_stab * s_stab_n + w_gof * s_gof_n + w_pen * s_pen_n
+             + w_me * s_me_n + w_heavy * s_heavy_n)
 
     idx = int(np.argmin(total))
     k_star = int(k_grid[idx])
@@ -277,8 +323,7 @@ def compute_baseline_k_star(
         k_star, idx, len(k_grid), total[idx],
     )
 
-    # Compute additional diagnostic series for CNN channels
-    hill_series = hill_estimator(sorted_desc, k_grid)
+    # Additional diagnostic series for CNN channels
     qq_resid_series = qq_residual(sorted_desc, k_grid, params)
     me_values = mean_excess_values(sorted_desc, k_grid)
 
@@ -290,6 +335,7 @@ def compute_baseline_k_star(
         "score_gof": s_gof,
         "score_mean_excess": s_me,
         "score_penalty": s_pen,
+        "score_heavy_tail": s_heavy,
         "total_score": total,
         "k_star": k_star,
         "hill_series": hill_series,

@@ -16,6 +16,10 @@ import numpy as np
 import torch
 import yaml
 
+# Make `src` importable when this script is launched from a subfolder.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from src.features import build_dataset_regression
 from src.model import ThresholdCNN
 from src.train import train_model, predict

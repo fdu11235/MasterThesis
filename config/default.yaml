@@ -10,7 +10,7 @@ synthetic:
     student_t:
       df: [3, 4, 5]
     pareto:
-      alpha: [1.5, 2.0, 3.0]
+      alpha: [1.05, 1.2, 1.5, 2.0, 3.0]   # xi up to ~0.95
     lognormal_pareto_mix:
       lognormal_mu: 0.0
       lognormal_sigma: 1.0
@@ -24,7 +24,7 @@ synthetic:
       c: [2, 5]
       d: [1, 2]
     frechet:
-      c: [2.0, 3.0, 5.0]
+      c: [1.05, 1.2, 1.5, 2.0, 3.0, 5.0]   # xi up to ~0.95
     dagum:
       c: [2, 5]
       d: [1, 2]
@@ -35,7 +35,7 @@ synthetic:
     weibull_stretched:
       c: [0.4, 0.6, 0.8]
     log_gamma:
-      b: [1.5, 2.0, 3.0]
+      b: [1.05, 1.2, 1.5, 2.0, 3.0]       # xi up to ~0.95
       p: 2.0
     gamma_pareto_splice:
       gamma_shape: [2, 3]
@@ -51,7 +51,7 @@ pot:
   k_min: 30
   k_max_frac: 0.15
   delta: 5
-  weights: [1.0, 1.0, 1.0, 2.0]  # stability, GoF, penalty, mean_excess
+  weights: [1.0, 1.0, 1.0, 2.0, 2.0]  # stability, GoF, penalty, mean_excess, heavy_tail
   decluster: true
   decluster_run_length: 10
 
@@ -65,7 +65,7 @@ model:
   batch_size: 64
   max_epochs: 500
   patience: 30
-  loss_type: "asymmetric"      # "smooth_l1", "asymmetric", or "var_aware"
+  loss_type: "smooth_l1"       # "smooth_l1", "asymmetric", or "var_aware"
   asymmetric_weight: 2.0
   loss_alpha: 1.0              # k* prediction weight
   loss_beta: 0.5               # VaR quality weight

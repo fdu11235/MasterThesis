@@ -35,6 +35,10 @@ import torch
 import yaml
 from joblib import Parallel, delayed
 
+# Make `src` importable when this script is launched from a subfolder.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from src.es_correction import ESCorrectionNet, apply_correction
 from src.evaluate import pot_es, pot_quantile, true_es
 from src.features import build_dataset_regression

@@ -20,6 +20,10 @@ import yaml
 from joblib import Parallel, delayed
 from scipy.stats import ttest_1samp
 
+# Make `src` importable when this script is launched from a subfolder.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from src.realdata import load_returns, rolling_windows, prepare_real_datasets_signsplit
 from src.pot import process_one_dataset
 from src.features import build_dataset_regression

@@ -17,6 +17,10 @@ import numpy as np
 import yaml
 from scipy.stats import ttest_1samp
 
+# Make `src` importable when this script is launched from a subfolder.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 from src.evaluate import pot_quantile, pot_es, true_es
 from src.features import build_dataset_regression
 from src.model import ThresholdCNN
