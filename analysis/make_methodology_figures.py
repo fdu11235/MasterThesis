@@ -63,13 +63,13 @@ def fig_a_synthetic_distributions():
     light = [
         ("lognormal", {"sigma": 1.0}, "lognormal $\\sigma = 1$", "#4C72B0"),
         ("weibull_stretched", {"c": 0.6}, "stretched Weibull $c = 0.6$", "#55A868"),
-        ("student_t", {"df": 4}, "Student-$t$ $\\nu = 4$", "#8172B2"),
     ]
     heavy = [
         ("pareto", {"alpha": 2.0}, "Pareto $\\alpha = 2$", "#C44E52"),
-        ("frechet", {"c": 3.0}, "Fr\\'echet $c = 3$", "#CCB974"),
+        ("frechet", {"c": 3.0}, "Fréchet $c = 3$", "#CCB974"),
         ("log_gamma", {"b": 2.0}, "log-gamma $b = 2$", "#937860"),
         ("burr12", {"c": 2, "d": 1}, "Burr XII $c=2, d=1$", "#64B5CD"),
+        ("student_t", {"df": 4}, "Student-$t$ $\\nu = 4$", "#8172B2"),
     ]
 
     fig, (ax_l, ax_h) = plt.subplots(1, 2, figsize=(10.5, 4.4))
@@ -88,8 +88,8 @@ def fig_a_synthetic_distributions():
         x_sorted, surv = _empirical_log_survival(ds["samples"])
         ax_h.loglog(x_sorted, surv, label=label, color=color, linewidth=1.5)
 
-    for ax, title in [(ax_l, "Gumbel MDA  (sub-exponential / light-tailed)"),
-                      (ax_h, "Fr\\'echet MDA  (power-law / heavy-tailed)")]:
+    for ax, title in [(ax_l, "Gumbel MDA  ($\\xi = 0$, rapidly varying)"),
+                      (ax_h, "Fréchet MDA  ($\\xi > 0$, power-law)")]:
         ax.set_xlabel("$x$  (log scale)")
         ax.set_ylabel("$\\hat{S}(x) = P(X \\geq x)$")
         ax.set_title(title)

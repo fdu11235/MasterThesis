@@ -218,3 +218,8 @@ latex/
 
 # Reference PDFs (papers, evaluation criteria) - keep local, never push
 docs/*.pdf
+
+# Methodology diagram toolchain (HTML/CSS/KaTeX -> vector PDF via headless Chromium).
+# Local tooling only; rendered figures land in outputs/ (already ignored).
+analysis/diagrams/
+list_of_tools.png

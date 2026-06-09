@@ -10,11 +10,18 @@ Two correction models are fitted side by side:
 Walk-forward parameters: warmup=200 windows (no correction applied before
 this many windows of history), refit_every=50.
 
+The MLP features are extracted at the CNN-predicted threshold k_hat (recomputed
+here from the transfer-learned model, exactly as run_real_pipeline.py does),
+not the baseline scorer threshold k*. The MLP weight initialisation is
+stochastic, so the MLP correction is run over several seeds and reported as the
+mean with the across-seed range. The scalar correction and the uncorrected
+baseline are deterministic (the scalar uses no features).
+
 Reads the existing pickles produced by run_real_pipeline.py. Writes a
 result pickle and one figure summarising the running correction factor
 and McNeil-Frey p-value.
 
-Run: python scripts/correction_net_real_walkforward.py
+Run: PYTHONPATH=. python analysis/correction_net_real_walkforward.py
 """
 
 from __future__ import annotations
@@ -40,6 +47,9 @@ from src.es_correction import (  # noqa: E402
     extract_features,
     train_correction_net,
 )
+from src.features import build_dataset_regression  # noqa: E402
+from src.model import ThresholdCNN  # noqa: E402
+from src.train import predict  # noqa: E402
 
 OUT_PKL = os.path.join(ROOT, "outputs", "correction_walkforward_results.pkl")
 OUT_FIG = os.path.join(ROOT, "outputs", "figures", "results_chapter",
@@ -47,6 +57,7 @@ OUT_FIG = os.path.join(ROOT, "outputs", "figures", "results_chapter",
 
 WARMUP = 200
 REFIT_EVERY = 50
+MLP_SEEDS = list(range(10))  # MLP weight init is stochastic; average over seeds
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s",
                     datefmt="%H:%M:%S")
@@ -160,6 +171,144 @@ def kupiec(n_violations, n_obs, p):
     return float(lr), float(p_val)
 
 
+def compute_khat_lookup(config, p):
+    """CNN-predicted threshold k_hat per loss-tail window, keyed by
+    (ticker, series_end_idx). Replicates run_real_pipeline.py's loss-tail
+    prediction: build regression features from the cached loss diagnostics,
+    predict with the transfer model, denormalise to an integer k.
+    """
+    with open(os.path.join(ROOT, "outputs/data/real_diagnostics_loss.pkl"), "rb") as f:
+        diag_list = pickle.load(f)
+    X, _y, meta = build_dataset_regression(diag_list, config)
+
+    mcfg = config["model"]
+    feat_cfg = config.get("features", {})
+    in_ch = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
+    tl = config.get("transfer_learning", {}).get("enabled", False)
+    ckpt = "model_real_transfer.pt" if tl else "model_real.pt"
+    model = ThresholdCNN(in_channels=in_ch, channels=mcfg["channels"],
+                         kernel_size=mcfg["kernel_size"], dropout=mcfg["dropout"],
+                         pool_sizes=mcfg.get("pool_sizes"), task="regression")
+    model.load_state_dict(torch.load(os.path.join(ROOT, "outputs/checkpoints", ckpt),
+                                     weights_only=True))
+    model.eval()
+    pred = predict(model, X, task="regression")
+    lookup = {}
+    for i, (ds, _diag) in enumerate(diag_list):
+        m = meta[i]
+        khat = int(np.clip(round(m["k_min"] + pred[i] * (m["k_max"] - m["k_min"])),
+                           m["k_min"], m["k_max"]))
+        lookup[(ds["ticker"], ds.get("series_end_idx", 0))] = khat
+    return lookup
+
+
+# Features are extracted at k_hat and do not depend on the MLP seed, so cache
+# them once and reuse across seeds.
+_FEAT_CACHE = {}
+
+
+def _features_at_khat(w_idx, rows, khat_lookup, config, p):
+    if w_idx in _FEAT_CACHE:
+        return _FEAT_CACHE[w_idx]
+    r = rows[w_idx]
+    ds, diag = r["ds"], r["diag"]
+    kstar = int(diag["k_star"])
+    k = khat_lookup.get((ds["ticker"], ds.get("series_end_idx", 0)), kstar)
+    feats = extract_features(ds, diag, k, p=p, config=config)
+    _FEAT_CACHE[w_idx] = feats
+    return feats
+
+
+def walk_forward(seed, rows, obs_records, config, p, khat_lookup):
+    """One expanding-window pass. The scalar correction and refit schedule are
+    deterministic; only the MLP weight init depends on `seed`."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    es_scalar = np.array([o["es_pred"] for o in obs_records], dtype=float)
+    es_mlp = np.array([o["es_pred"] for o in obs_records], dtype=float)
+    scalar_history = []
+    refit_log = []
+    mlp_state = {"model": None, "X_mean": None, "X_std": None}
+    correction_applied_from = None
+    last_refit_w = None
+    c_scalar_current = 1.0
+
+    for w_idx, r in enumerate(rows):
+        if w_idx >= WARMUP and (last_refit_w is None
+                                or w_idx - last_refit_w >= REFIT_EVERY):
+            last_refit_w = w_idx
+            X_list, y_list = [], []
+            for o in obs_records:
+                if o["w_idx"] >= w_idx:
+                    break
+                if not o["violated"]:
+                    continue
+                feats = _features_at_khat(o["w_idx"], rows, khat_lookup, config, p)
+                if feats is None:
+                    continue
+                y_list.append(o["real_loss"] / max(o["es_pred"], 1e-10))
+                X_list.append(feats)
+            n_train = len(y_list)
+            if n_train >= 5:
+                X_arr = np.array(X_list, dtype=np.float32)
+                y_arr = np.array(y_list, dtype=np.float32)
+                c_scalar_current = float(y_arr.mean())
+                config_mlp = dict(config)
+                ec = dict(config.get("es_correction", {}))
+                ec["batch_size"] = max(4, min(16, n_train // 2 or 1))
+                ec["max_epochs"] = 200
+                ec["patience"] = 20
+                ec["val_fraction"] = 0.2 if n_train >= 20 else 0.0
+                config_mlp["es_correction"] = ec
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        if ec["val_fraction"] == 0.0:
+                            ec["val_fraction"] = 0.25
+                        model, _hist = train_correction_net(X_arr, y_arr, config_mlp)
+                    mlp_state["model"] = model
+                    mlp_state["X_mean"] = model.X_mean
+                    mlp_state["X_std"] = model.X_std
+                except Exception as e:
+                    log.warning("MLP fit failed at w_idx=%d (n_train=%d): %s",
+                                w_idx, n_train, e)
+                refit_log.append({"w_idx": w_idx, "n_train": n_train,
+                                  "c_scalar": c_scalar_current})
+                if correction_applied_from is None:
+                    correction_applied_from = w_idx
+
+        if w_idx < WARMUP or correction_applied_from is None:
+            continue
+        for o_idx, o in enumerate(obs_records):
+            if o["w_idx"] != w_idx:
+                continue
+            es_scalar[o_idx] = c_scalar_current * o["es_pred"]
+            if mlp_state["model"] is not None:
+                feats = _features_at_khat(w_idx, rows, khat_lookup, config, p)
+                fn = (feats - mlp_state["X_mean"]) / mlp_state["X_std"]
+                with torch.no_grad():
+                    c = float(mlp_state["model"](
+                        torch.tensor(fn, dtype=torch.float32).unsqueeze(0)).item())
+                es_mlp[o_idx] = c * o["es_pred"]
+            else:
+                es_mlp[o_idx] = c_scalar_current * o["es_pred"]
+        scalar_history.append((w_idx, c_scalar_current))
+
+    eval_start = correction_applied_from or WARMUP
+    return {"es_scalar": es_scalar, "es_mlp": es_mlp,
+            "scalar_history": scalar_history, "refit_log": refit_log,
+            "eval_start": eval_start}
+
+
+def _mf_stats(realised, es_arr, mask):
+    resid = (realised[mask] - es_arr[mask]) / es_arr[mask]
+    t, p_val, n = mcneil_frey(resid)
+    return {"n_viol": n, "t": t, "p": p_val,
+            "mean_real": float(realised[mask].mean()),
+            "mean_es": float(es_arr[mask].mean())}
+
+
 def main():
     cfg_path = os.path.join(ROOT, "config", "default.yaml")
     with open(cfg_path, "r") as f:
@@ -168,205 +317,78 @@ def main():
 
     log.info("Loading return data and reconstructing test slice ...")
     returns_lookup = load_returns_lookup()
-    log.info("  loaded returns for tickers: %s", sorted(returns_lookup.keys()))
     rows = build_test_data(config, returns_lookup)
     log.info("Reconstructed %d test windows on the loss tail", len(rows))
 
-    # Convenience arrays for the BASELINE (no correction).
-    # We treat each future-day observation independently.
-    obs_records = []  # one entry per (window, future_day)
+    obs_records = []
     for w_idx, r in enumerate(rows):
-        var_pred = r["var_pred"]
-        es_pred = r["es_pred"]
-        fut = r["future_returns"]
-        # tail_mode == "loss": violations = future loss exceeds VaR.
-        # signed_returns < 0 means loss; magnitude is abs(signed) for violations
-        # against VaR computed on loss-tail magnitudes.
-        loss_mags = np.where(fut < 0, -fut, 0.0)
-        for d_idx, mag in enumerate(loss_mags):
+        loss_mags = np.where(r["future_returns"] < 0, -r["future_returns"], 0.0)
+        for mag in loss_mags:
             obs_records.append({
-                "w_idx": w_idx,
-                "ticker": r["ticker"],
-                "end_date": r["end_date"],
-                "real_loss": float(mag),
-                "var_pred": var_pred,
-                "es_pred": es_pred,
-                "violated": bool(mag > var_pred),
+                "w_idx": w_idx, "ticker": r["ticker"], "end_date": r["end_date"],
+                "real_loss": float(mag), "var_pred": r["var_pred"],
+                "es_pred": r["es_pred"], "violated": bool(mag > r["var_pred"]),
             })
+    log.info("Total per-day observations: %d; violations: %d",
+             len(obs_records), sum(o["violated"] for o in obs_records))
 
-    log.info("Total per-day observations: %d", len(obs_records))
-    n_viol_total = sum(o["violated"] for o in obs_records)
-    log.info("Total loss-tail violations (uncorrected VaR): %d", n_viol_total)
+    log.info("Computing CNN k_hat per window ...")
+    khat_lookup = compute_khat_lookup(config, p)
 
-    # Walk-forward
-    # State: list of "training pairs" accumulated from observed violations.
-    # A training pair has (features, target = realized_loss / es_pred).
-    train_X = []
-    train_y = []
-    train_meta = []
+    log.info("Running walk-forward over %d MLP seeds ...", len(MLP_SEEDS))
+    runs = [walk_forward(s, rows, obs_records, config, p, khat_lookup) for s in MLP_SEEDS]
 
-    scalar_history = []   # (w_idx, c_scalar)
-    mlp_state = {"model": None, "X_mean": None, "X_std": None}
-    refit_log = []
-
-    cnn_features_cache = {}  # cache per w_idx
-
-    def _features_for(w_idx):
-        if w_idx in cnn_features_cache:
-            return cnn_features_cache[w_idx]
-        r = rows[w_idx]
-        ds, diag = r["ds"], r["diag"]
-        # use baseline k* as a proxy for the CNN k_pred (they coincide tightly
-        # after the heavy-tail-penalty scorer fix).
-        k = int(diag["k_star"])
-        feats = extract_features(ds, diag, k, p=p, config=config)
-        cnn_features_cache[w_idx] = feats
-        return feats
-
-    # Per-method predicted-ES arrays (corrected). Index: per future-day obs.
-    n_obs = len(obs_records)
-    es_scalar = np.array([o["es_pred"] for o in obs_records], dtype=float)
-    es_mlp = np.array([o["es_pred"] for o in obs_records], dtype=float)
-    correction_applied_from = None  # first w_idx with a non-trivial correction
-
-    last_refit_w = None
-    c_scalar_current = 1.0
-
-    # Iterate windows in order.
-    for w_idx, r in enumerate(rows):
-        # Refit if needed.
-        if w_idx >= WARMUP and (last_refit_w is None
-                                 or w_idx - last_refit_w >= REFIT_EVERY):
-            last_refit_w = w_idx
-            # Accumulate training pairs from all violations in windows < w_idx.
-            X_list, y_list = [], []
-            for o in obs_records:
-                if o["w_idx"] >= w_idx:
-                    break
-                if not o["violated"]:
-                    continue
-                feats = _features_for(o["w_idx"])
-                if feats is None:
-                    continue
-                target = o["real_loss"] / max(o["es_pred"], 1e-10)
-                X_list.append(feats)
-                y_list.append(target)
-            n_train = len(y_list)
-            if n_train >= 5:
-                X_arr = np.array(X_list, dtype=np.float32)
-                y_arr = np.array(y_list, dtype=np.float32)
-                # Scalar: mean of targets (least-squares-optimal under MSE
-                # when the predictor is a constant). Equivalent to
-                # mean(realized)/mean(es) for the multiplicative form when
-                # using simple per-violation ratios.
-                c_scalar_current = float(y_arr.mean())
-                # MLP: train with the existing trainer. Adapt batch size to
-                # the very small training-set size and lower max_epochs.
-                config_mlp = dict(config)
-                ec = dict(config.get("es_correction", {}))
-                ec["batch_size"] = max(4, min(16, n_train // 2 or 1))
-                ec["max_epochs"] = 200
-                ec["patience"] = 20
-                ec["val_fraction"] = 0.2 if n_train >= 20 else 0.0
-                config_mlp["es_correction"] = ec
-
-                try:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        if ec["val_fraction"] == 0.0:
-                            # Train without validation split when too few points.
-                            # Hack: pass a non-zero val_fraction and accept noisy.
-                            ec["val_fraction"] = 0.25
-                        model, _hist = train_correction_net(X_arr, y_arr, config_mlp)
-                    mlp_state["model"] = model
-                    mlp_state["X_mean"] = model.X_mean
-                    mlp_state["X_std"] = model.X_std
-                except Exception as e:
-                    log.warning("MLP fit failed at w_idx=%d (n_train=%d): %s",
-                                 w_idx, n_train, e)
-                refit_log.append({"w_idx": w_idx, "n_train": n_train,
-                                  "c_scalar": c_scalar_current})
-                if correction_applied_from is None:
-                    correction_applied_from = w_idx
-
-        if w_idx < WARMUP or correction_applied_from is None:
-            continue
-
-        # Apply both corrections to this window's ES estimate
-        for o_idx, o in enumerate(obs_records):
-            if o["w_idx"] != w_idx:
-                continue
-            es_scalar[o_idx] = c_scalar_current * o["es_pred"]
-            if mlp_state["model"] is not None:
-                feats = _features_for(w_idx)
-                if feats is None:
-                    es_mlp[o_idx] = c_scalar_current * o["es_pred"]
-                else:
-                    feats_norm = (feats - mlp_state["X_mean"]) / mlp_state["X_std"]
-                    with torch.no_grad():
-                        c = float(mlp_state["model"](
-                            torch.tensor(feats_norm, dtype=torch.float32).unsqueeze(0)
-                        ).item())
-                    es_mlp[o_idx] = c * o["es_pred"]
-            else:
-                es_mlp[o_idx] = c_scalar_current * o["es_pred"]
-
-        scalar_history.append((w_idx, c_scalar_current))
-
-    # Final aggregate over the eval slice (w_idx >= warmup and correction available).
-    eval_idx_start = correction_applied_from or WARMUP
-    eval_mask = np.array([o["w_idx"] >= eval_idx_start for o in obs_records])
-    viol_mask = np.array([o["violated"] for o in obs_records])
-    use = eval_mask & viol_mask
-
-    es_uncorr = np.array([o["es_pred"] for o in obs_records])
     realised = np.array([o["real_loss"] for o in obs_records])
+    es_uncorr = np.array([o["es_pred"] for o in obs_records])
+    viol_mask = np.array([o["violated"] for o in obs_records])
+    eval_idx_start = runs[0]["eval_start"]
+    use = np.array([o["w_idx"] >= eval_idx_start for o in obs_records]) & viol_mask
 
-    summary = {}
-    for name, es_arr in [("uncorrected", es_uncorr),
-                         ("scalar", es_scalar),
-                         ("mlp", es_mlp)]:
-        if use.sum() < 5:
-            summary[name] = {"n_viol": int(use.sum()), "t": float("nan"),
-                             "p": float("nan"), "mean_real": float("nan"),
-                             "mean_es": float("nan")}
-            continue
-        resid = (realised[use] - es_arr[use]) / es_arr[use]
-        t, p_val, n = mcneil_frey(resid)
-        summary[name] = {
-            "n_viol": n, "t": t, "p": p_val,
-            "mean_real": float(realised[use].mean()),
-            "mean_es": float(es_arr[use].mean()),
-        }
+    # Deterministic methods (identical across seeds).
+    summary = {
+        "uncorrected": _mf_stats(realised, es_uncorr, use),
+        "scalar": _mf_stats(realised, runs[0]["es_scalar"], use),
+    }
+    # MLP: one McNeil-Frey per seed, reported as mean + across-seed range.
+    mlp_per_seed = [_mf_stats(realised, rn["es_mlp"], use) for rn in runs]
+    mlp_p = np.array([s["p"] for s in mlp_per_seed])
+    mlp_t = np.array([s["t"] for s in mlp_per_seed])
+    mlp_es = np.array([s["mean_es"] for s in mlp_per_seed])
+    summary["mlp"] = {
+        "n_viol": mlp_per_seed[0]["n_viol"],
+        "p": float(mlp_p.mean()), "p_median": float(np.median(mlp_p)),
+        "p_min": float(mlp_p.min()), "p_max": float(mlp_p.max()),
+        "n_pass": int((mlp_p > 0.05).sum()), "n_seeds": len(MLP_SEEDS),
+        "t": float(mlp_t.mean()),
+        "mean_real": mlp_per_seed[0]["mean_real"], "mean_es": float(mlp_es.mean()),
+    }
 
-    # Per-ticker McNeil-Frey on eval slice
+    # Per-ticker (eval slice): scalar/uncorrected deterministic; MLP seed-mean.
     per_ticker = {}
     tickers_per_obs = np.array([o["ticker"] for o in obs_records])
     for tk in sorted(set(tickers_per_obs)):
-        per_ticker[tk] = {}
         sel = use & (tickers_per_obs == tk)
         if sel.sum() < 5:
             per_ticker[tk] = {"n": int(sel.sum())}
             continue
-        for name, es_arr in [("uncorrected", es_uncorr),
-                             ("scalar", es_scalar),
-                             ("mlp", es_mlp)]:
-            resid = (realised[sel] - es_arr[sel]) / es_arr[sel]
-            t, p_val, n = mcneil_frey(resid)
-            per_ticker[tk][name] = {"n": n, "t": t, "p": p_val}
+        entry = {
+            "uncorrected": _mf_stats(realised, es_uncorr, sel),
+            "scalar": _mf_stats(realised, runs[0]["es_scalar"], sel),
+        }
+        tk_p = np.array([_mf_stats(realised, rn["es_mlp"], sel)["p"] for rn in runs])
+        tk_t = np.array([_mf_stats(realised, rn["es_mlp"], sel)["t"] for rn in runs])
+        entry["mlp"] = {"n": int(sel.sum()), "p": float(tk_p.mean()),
+                        "p_min": float(tk_p.min()), "p_max": float(tk_p.max()),
+                        "t": float(tk_t.mean())}
+        per_ticker[tk] = entry
 
-    # Save
     out = {
-        "summary": summary,
-        "per_ticker": per_ticker,
-        "scalar_history": scalar_history,
-        "refit_log": refit_log,
-        "warmup": WARMUP,
-        "refit_every": REFIT_EVERY,
-        "eval_idx_start": eval_idx_start,
-        "n_test_windows": len(rows),
-        "n_obs": int(len(obs_records)),
-        "n_viol_total": int(viol_mask.sum()),
+        "summary": summary, "per_ticker": per_ticker,
+        "scalar_history": runs[0]["scalar_history"], "refit_log": runs[0]["refit_log"],
+        "warmup": WARMUP, "refit_every": REFIT_EVERY, "mlp_seeds": MLP_SEEDS,
+        "feature_threshold": "k_hat", "mlp_p_per_seed": mlp_p.tolist(),
+        "eval_idx_start": eval_idx_start, "n_test_windows": len(rows),
+        "n_obs": int(len(obs_records)), "n_viol_total": int(viol_mask.sum()),
         "n_viol_eval": int(use.sum()),
     }
     with open(OUT_PKL, "wb") as f:
@@ -375,11 +397,10 @@ def main():
 
     # Figure
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.0, 4.0))
-    if scalar_history:
-        xs, cs = zip(*scalar_history)
+    if out["scalar_history"]:
+        xs, cs = zip(*out["scalar_history"])
         ax1.plot(xs, cs, color="#4C72B0", linewidth=1.5)
-    ax1.axhline(1.0, color="#444", linestyle="--", linewidth=1.0,
-                label="no correction")
+    ax1.axhline(1.0, color="#444", linestyle="--", linewidth=1.0, label="no correction")
     ax1.set_xlabel("test window index")
     ax1.set_ylabel("scalar correction $c(t)$")
     ax1.set_title("Expanding-window scalar correction factor")
@@ -387,17 +408,20 @@ def main():
 
     bar_methods = ["uncorrected", "scalar", "mlp"]
     bar_p = [summary[m]["p"] for m in bar_methods]
-    bar_colors = ["#888", "#4C72B0", "#C44E52"]
-    ax2.bar(bar_methods, bar_p, color=bar_colors,
+    ax2.bar(bar_methods, bar_p, color=["#888", "#4C72B0", "#C44E52"],
             edgecolor="white", linewidth=0.6)
-    ax2.axhline(0.05, color="#444", linestyle="--", linewidth=1.0,
-                label="$p = 0.05$ cutoff")
+    # show the across-seed range for the MLP bar
+    ax2.errorbar([2], [summary["mlp"]["p"]],
+                 yerr=[[summary["mlp"]["p"] - summary["mlp"]["p_min"]],
+                       [summary["mlp"]["p_max"] - summary["mlp"]["p"]]],
+                 fmt="none", ecolor="#333", capsize=4, linewidth=1.0)
+    ax2.axhline(0.05, color="#444", linestyle="--", linewidth=1.0, label="$p = 0.05$ cutoff")
     ax2.set_yscale("log")
     ax2.set_ylim(1e-4, 1.0)
     for i, m in enumerate(bar_methods):
-        ax2.text(i, max(bar_p[i], 1e-4) * 1.15,
-                 f"$p = {bar_p[i]:.3f}$" if not np.isnan(bar_p[i]) else "n/a",
-                 ha="center", fontsize=9)
+        lbl = (f"$p = {bar_p[i]:.3f}$" if m != "mlp"
+               else f"mean $p = {bar_p[i]:.3f}$")
+        ax2.text(i, max(bar_p[i], 1e-4) * 1.25, lbl, ha="center", fontsize=9)
     ax2.set_ylabel("McNeil-Frey $p$-value, log scale")
     ax2.set_title("McNeil-Frey on the eval slice")
     ax2.legend(loc="best", frameon=True)
@@ -405,7 +429,7 @@ def main():
     fig.suptitle(
         f"Walk-forward ES correction on the real loss tail "
         f"(eval window indices {eval_idx_start} to {len(rows)-1}, "
-        f"{out['n_viol_eval']} violations)",
+        f"{out['n_viol_eval']} violations; MLP averaged over {len(MLP_SEEDS)} seeds)",
         y=1.04, fontsize=11,
     )
     fig.tight_layout()
@@ -413,14 +437,19 @@ def main():
     plt.close(fig)
     log.info("Wrote %s", OUT_FIG)
 
-    # Print summary
     log.info("=" * 60)
     log.info("Eval slice: %d windows >= idx %d, %d violations",
              len(rows) - eval_idx_start, eval_idx_start, out["n_viol_eval"])
-    for name in bar_methods:
-        s = summary[name]
-        log.info("  %-12s  n=%d  t=%+.2f  p=%.4f   mean_real=%.4f  mean_es=%.4f",
-                 name, s["n_viol"], s["t"], s["p"], s["mean_real"], s["mean_es"])
+    s = summary["uncorrected"]
+    log.info("  uncorrected  n=%d  t=%+.2f  p=%.4f  mean_es=%.4f",
+             s["n_viol"], s["t"], s["p"], s["mean_es"])
+    s = summary["scalar"]
+    log.info("  scalar       n=%d  t=%+.2f  p=%.4f  mean_es=%.4f",
+             s["n_viol"], s["t"], s["p"], s["mean_es"])
+    s = summary["mlp"]
+    log.info("  mlp(k_hat)   n=%d  t=%+.2f  p=%.4f [%.4f,%.4f] pass %d/%d  mean_es=%.4f",
+             s["n_viol"], s["t"], s["p"], s["p_min"], s["p_max"],
+             s["n_pass"], s["n_seeds"], s["mean_es"])
 
 
 if __name__ == "__main__":
