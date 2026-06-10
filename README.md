@@ -8,8 +8,8 @@ Choosing the threshold for a POT/GPD fit is the central problem in extreme value
 
 The method works in three parts:
 
-1. **Synthetic training.** Datasets are generated from distributions with known tail behaviour (Student-t, Pareto, and mixtures). A baseline scoring rule selects the optimal number of exceedances k* from a grid of candidate thresholds. A 1D CNN is then trained to replicate and generalize that selection from diagnostic curves (xi stability, Anderson-Darling goodness-of-fit, mean excess, Hill estimator, and others).
-2. **Real-data evaluation.** The trained model is fine-tuned by transfer learning and applied to daily returns of five global equity indices. Tail risk is evaluated with out-of-sample VaR and Expected Shortfall (ES) backtesting, including Kupiec, Christoffersen, and McNeil-Frey tests. POT is fitted both on raw returns and on GARCH(1,1)-standardized residuals.
+1. **Synthetic training.** Datasets are generated from thirteen distribution families with known tail behaviour, spanning the Fréchet and Gumbel domains. A baseline scoring rule selects the optimal number of exceedances k* from a grid of candidate thresholds. A 1D CNN is then trained to replicate and generalize that selection from diagnostic curves (xi stability, Anderson-Darling goodness-of-fit, mean excess, Hill estimator, and others).
+2. **Real-data evaluation.** The trained model is fine-tuned by transfer learning and applied to daily returns of eight tickers: six technology-focused equities (NYSE FANG+ index, AAPL, MSFT, NVDA, AMZN, META) and two cryptocurrencies (BTC-USD, ETH-USD). Tail risk is evaluated with out-of-sample VaR and Expected Shortfall (ES) backtesting, including Kupiec, Christoffersen, and McNeil-Frey tests. POT is fitted both on raw returns and on GARCH(1,1)-standardized residuals.
 3. **ES correction.** A separate correction network addresses the systematic bias in GPD-based ES estimates, which is most severe in the high tail-index regime.
 
 ## Setup
@@ -46,18 +46,12 @@ One-off experiment drivers live in `experiments/`. Launch them from the repo roo
 python experiments/run_high_xi_experiment.py --config config/high_xi.yaml
 ```
 
-## Tests
-
-```bash
-pytest tests/ -v
-```
-
 ## Project structure
 
 Core source and entry points:
 
 - `config/` - YAML configuration (`default.yaml` plus ablation and window-size variants)
-- `src/synthetic.py` - synthetic data generation (Student-t, Pareto, mixtures)
+- `src/synthetic.py` - synthetic data generation (thirteen distribution families)
 - `src/pot.py` - GPD fitting, Anderson-Darling GOF, mean excess diagnostic, baseline scoring
 - `src/features.py` - 7-channel feature matrix for the CNN (xi, beta, AD GOF, mean excess score, Hill estimator, QQ residual, raw mean excess)
 - `src/model.py` - 1D CNN architecture (classification and regression heads)
@@ -78,8 +72,4 @@ Supporting code and material:
 - `experiments/` - one-off experiment drivers (run from the repo root)
 - `analysis/` - figure generation, ES closed-form validation, and robustness checks
 - `docs/` - appendices, investigation notes, and figures.
-- `tests/` - pytest suite
 - `outputs/` - generated at runtime
-## Results
-
-The full results, figures, and discussion live in the LaTeX thesis under `latex/` (kept local, git-ignored). Generated figures are in `docs/figures/`, and the technical appendices are `docs/appendix_es_validation.md` and `docs/high_xi_es_investigation.md`.
