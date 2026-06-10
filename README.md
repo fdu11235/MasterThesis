@@ -70,17 +70,16 @@ Core source and entry points:
 - `src/perturbation.py` - perturbation robustness utilities
 - `run_pipeline.py` - synthetic pipeline entry point (Steps 1-7)
 - `run_real_pipeline.py` - real-data pipeline entry point (Step 8)
-- `run_perturbation_experiment.py` - perturbation experiment (also part of the overnight chain)
+- `run_perturbation_experiment.py` - perturbation experiment
 - `run_all.sh` - runs the three core pipelines end to end
 
 Supporting code and material:
 
 - `experiments/` - one-off experiment drivers (run from the repo root)
 - `analysis/` - figure generation, ES closed-form validation, and robustness checks
-- `docs/` - appendices, investigation notes, and figures. Reference PDFs are kept locally and git-ignored.
+- `docs/` - appendices, investigation notes, and figures.
 - `tests/` - pytest suite
-- `outputs/` - generated at runtime (git-ignored)
-
+- `outputs/` - generated at runtime
 ## Results
 
 The full results, figures, and discussion live in the LaTeX thesis under `latex/` (kept local, git-ignored). Generated figures are in `docs/figures/`, and the technical appendices are `docs/appendix_es_validation.md` and `docs/high_xi_es_investigation.md`.
