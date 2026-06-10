@@ -162,12 +162,12 @@ def main():
     print(f"  rel RMSE (VaR): {results['relative_rmse'] * 100:.2f}%")
     print(f"  rel RMSE (ES):  {results['es_relative_rmse'] * 100:.2f}%")
 
-    # ── Persist the full result dict ──────────────────────────────────────
+    # Persist the full result dict
     with open(OUT_PKL, "wb") as f:
         pickle.dump(results, f)
     print(f"Wrote {OUT_PKL}")
 
-    # ── Regenerate the per-family table ───────────────────────────────────
+    # Regenerate the per-family table
     rmse_by = results["rmse_by_dist"]
     # Sort ascending by ES rel RMSE
     rows = sorted(
@@ -191,7 +191,7 @@ def main():
         f.write("\n".join(lines))
     print(f"Wrote {TABLE_PATH}")
 
-    # ── Regenerate the three §5.1 figures from the same source ────────────
+    # Regenerate the three §5.1 figures from the same source
     dist_types = list(results["_dist_types"])
     rel_err_pct = np.asarray(results["_rel_errors"]) * 100.0
     k_err = k_pred.astype(float) - k_true.astype(float)
@@ -278,7 +278,7 @@ def main():
     fig.savefig(os.path.join(FIG_DIR, "residuals.png"), dpi=150)
     plt.close(fig)
 
-    # ── Composite-tail decomposition on the test set ──────────────────────
+    # Composite-tail decomposition on the test set
     decomp_lines = []
     decomp_lines.append("Composite-tail decomposition on the held-out test "
                         "split (same data as the table / figures above)\n")

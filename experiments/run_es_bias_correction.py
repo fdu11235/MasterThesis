@@ -45,7 +45,7 @@ def main():
     backtest_horizon = config['realdata']['backtest_horizon']
     train_frac = config['realdata']['train_fraction']
 
-    # ── Load model ─────────────────────────────────────────────────────────
+    # Load model
     model_cfg = config['model']
     in_channels = len(config.get('features', {}).get('columns', [0,1,2,3,4,5,6]))
 
@@ -57,9 +57,7 @@ def main():
     model.load_state_dict(torch.load('outputs/checkpoints/model_regression.pt', weights_only=True))
     model.eval()
 
-    # ══════════════════════════════════════════════════════════════════════
-    # STEP 1: Build bias table from synthetic data
-    # ══════════════════════════════════════════════════════════════════════
+    # Step 1: Build bias table from synthetic data
     logger.info("Step 1: Building bias table from synthetic data...")
 
     with open('outputs/data/diagnostics.pkl', 'rb') as f:
@@ -139,9 +137,7 @@ def main():
         logger.info("  %-10s %+10.3f %+10.3f %10.3f %8d",
                      lbl, median_bias, mean_bias, std_bias, mask.sum())
 
-    # ══════════════════════════════════════════════════════════════════════
-    # STEP 2: Apply correction to real data
-    # ══════════════════════════════════════════════════════════════════════
+    # Step 2: Apply correction to real data
     logger.info("\nStep 2: Applying bias correction to real data...")
 
     with open('outputs/data/real_datasets.pkl', 'rb') as f:
@@ -177,9 +173,7 @@ def main():
                 return stats['median_bias']
         return 0.0
 
-    # ══════════════════════════════════════════════════════════════════════
-    # STEP 3: Re-run McNeil-Frey with corrected and uncorrected ES
-    # ══════════════════════════════════════════════════════════════════════
+    # Step 3: Re-run McNeil-Frey with corrected and uncorrected ES
     logger.info("\nStep 3: Re-running McNeil-Frey test...")
 
     def run_mf(correction_mode):
@@ -315,7 +309,7 @@ def main():
         logger.info("  %-15s: MF p=%.4f (%s), mean_resid=%.4f, n_viol=%d",
                      mode, pv, label, mr, nv)
 
-    # ── Save ───────────────────────────────────────────────────────────────
+    # Save
     save_data = {
         'bias_table': bias_table,
         'results': results,

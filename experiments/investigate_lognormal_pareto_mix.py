@@ -120,7 +120,7 @@ def main():
     p = config['evaluate']['quantile_p']
     os.makedirs(FIG_DIR, exist_ok=True)
 
-    # ── load cached diagnostics, keep lognormal_pareto_mix only ───────────
+    # load cached diagnostics, keep lognormal_pareto_mix only
     logger.info("Loading cached diagnostics ...")
     with open('outputs/data/diagnostics.pkl', 'rb') as f:
         all_diag = pickle.load(f)
@@ -128,7 +128,7 @@ def main():
           if ds['dist_type'] == 'lognormal_pareto_mix']
     logger.info("lognormal_pareto_mix datasets: %d", len(lp))
 
-    # ── CNN k_pred for the lognormal_pareto_mix subset ────────────────────
+    # CNN k_pred for the lognormal_pareto_mix subset
     mc = config['model']
     model = ThresholdCNN(
         in_channels=len(config['features']['columns']), channels=mc['channels'],
@@ -146,7 +146,7 @@ def main():
         for yp, m in zip(y_pred, meta)
     ])
 
-    # ── per-dataset ES error at the three thresholds ──────────────────────
+    # per-dataset ES error at the three thresholds
     records = []
     for i, (ds, diag) in enumerate(lp):
         prm = ds['params']
@@ -187,7 +187,7 @@ def main():
         })
     logger.info("Decomposed %d lognormal_pareto_mix datasets", len(records))
 
-    # ── results table per pareto_alpha ────────────────────────────────────
+    # results table per pareto_alpha
     alphas = sorted({r['pareto_alpha'] for r in records})
     logger.info("\nLOGNORMAL_PARETO_MIX ES ERROR vs THRESHOLD "
                 "(median %%, n=1000)\n"
@@ -222,7 +222,7 @@ def main():
     logger.info("  Selection accounts for ~%.0f%% of pooled RRMSE; "
                 "the rest is residual at oracle.", selection_share)
 
-    # ── Plot 1: ES error by threshold strategy, per pareto_alpha ──────────
+    # Plot 1: ES error by threshold strategy, per pareto_alpha
     fig, ax = plt.subplots(figsize=(10, 6))
     box_data, box_colors, positions, ticks = [], [], [], []
     palette = {'E_pred': '#348ABD', 'E_mix': '#8EBA42', 'E_oracle': '#E24A33'}
@@ -253,7 +253,7 @@ def main():
     fig.savefig(f'{FIG_DIR}/lpm_es_by_threshold.png', dpi=150)
     plt.close(fig)
 
-    # ── Plot 2: xi_hat / Hill profiles vs k, panel per pareto_alpha ───────
+    # Plot 2: xi_hat / Hill profiles vs k, panel per pareto_alpha
     fig, axes = plt.subplots(1, len(alphas), figsize=(5 * len(alphas), 5),
                              squeeze=False)
     for ax, a in zip(axes[0], alphas):
@@ -281,7 +281,7 @@ def main():
     fig.savefig(f'{FIG_DIR}/lpm_xi_profiles.png', dpi=150)
     plt.close(fig)
 
-    # ── Plot 3: ES error vs k overshoot ratio ─────────────────────────────
+    # Plot 3: ES error vs k overshoot ratio
     fig, ax = plt.subplots(figsize=(10, 6))
     for a in alphas:
         rs = [r for r in records if r['pareto_alpha'] == a]

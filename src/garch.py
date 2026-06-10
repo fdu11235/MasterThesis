@@ -51,14 +51,11 @@ def fit_garch_and_filter(returns, forecast_horizon=1):
             logger.debug("GARCH did not converge, using fallback")
             return _fallback(returns, forecast_horizon)
 
-        # Conditional volatility (in percentage scale)
         cond_vol_pct = res.conditional_volatility
         cond_vol = cond_vol_pct / scale
 
-        # Standardized residuals
         std_resid = returns / np.maximum(cond_vol, 1e-10)
 
-        # Forecast volatilities
         fcast = res.forecast(horizon=forecast_horizon)
         # fcast.variance has shape (n, horizon), last row is the forecast from T
         forecast_var_pct = fcast.variance.iloc[-1].values  # (horizon,)

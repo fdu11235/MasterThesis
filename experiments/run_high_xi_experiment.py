@@ -62,9 +62,7 @@ DATA_DIR = f'{OUT_DIR}/data'
 FIG_DIR = f'{OUT_DIR}/figures'
 
 
-# ──────────────────────────────────────────────────────────────────────────
 # ES helpers
-# ──────────────────────────────────────────────────────────────────────────
 def closed_form_es_at_xi(sorted_desc, k, xi_use, beta, n, p):
     """GPD closed-form ES evaluated with an arbitrary shape parameter.
 
@@ -123,9 +121,7 @@ def compute_oracle_k(ds, diag, p, es_true, target='es'):
     return best_k
 
 
-# ──────────────────────────────────────────────────────────────────────────
 # Data + diagnostics
-# ──────────────────────────────────────────────────────────────────────────
 def load_or_compute_diagnostics(config, n_jobs, fresh):
     """Generate the high-xi Pareto datasets and POT diagnostics (cached)."""
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -199,9 +195,7 @@ def load_es_correction_net(config):
     return model
 
 
-# ──────────────────────────────────────────────────────────────────────────
 # Per-dataset ES error decomposition
-# ──────────────────────────────────────────────────────────────────────────
 def decompose_es_error(ds, diag, k_star, k_pred, k_oracle, corr_model, p, config):
     """Full ES error decomposition for one dataset. Returns a record dict."""
     alpha = ds['params']['alpha']
@@ -257,9 +251,7 @@ def decompose_es_error(ds, diag, k_star, k_pred, k_oracle, corr_model, p, config
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────
 # xi bias / variance vs k
-# ──────────────────────────────────────────────────────────────────────────
 def _pad_stack(series_list):
     """Stack 1-D arrays of unequal length, NaN-padding the short ones.
 
@@ -293,9 +285,7 @@ def xi_bias_variance_by_k(diag_group, xi_true):
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────
 # Aggregation + table
-# ──────────────────────────────────────────────────────────────────────────
 def _median_iqr(vals):
     a = np.asarray(vals, dtype=float)
     return {
@@ -349,9 +339,7 @@ def format_table(decomposition):
     return '\n'.join(lines)
 
 
-# ──────────────────────────────────────────────────────────────────────────
 # Plots
-# ──────────────────────────────────────────────────────────────────────────
 def make_plots(records, decomposition, xi_profiles, fig_dir):
     os.makedirs(fig_dir, exist_ok=True)
     alphas = sorted({r['alpha'] for r in records})
@@ -476,9 +464,7 @@ def make_plots(records, decomposition, xi_profiles, fig_dir):
     logger.info("Saved 5 plots to %s/high_xi_*.png", fig_dir)
 
 
-# ──────────────────────────────────────────────────────────────────────────
 # Verification
-# ──────────────────────────────────────────────────────────────────────────
 def run_verification(records, model, config):
     """Plan verification checks 1-6. Logs PASS/FAIL, raises on hard failure."""
     logger.info("=" * 60)
@@ -520,7 +506,6 @@ def run_verification(records, model, config):
     logger.info("=" * 60)
 
 
-# ──────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='config/high_xi.yaml')
@@ -546,10 +531,10 @@ def main():
     os.makedirs(FIG_DIR, exist_ok=True)
     p = config['evaluate']['quantile_p']
 
-    # ── data + diagnostics ────────────────────────────────────────────────
+    # data + diagnostics
     all_diagnostics = load_or_compute_diagnostics(config, args.n_jobs, args.fresh)
 
-    # ── CNN (verification check 1: architecture match) ────────────────────
+    # CNN (verification check 1: architecture match)
     mc = config['model']
     in_channels = len(config['features']['columns'])
     model = ThresholdCNN(
@@ -566,7 +551,7 @@ def main():
 
     corr_model = load_es_correction_net(config)
 
-    # ── three k-values + decomposition ────────────────────────────────────
+    # three k-values + decomposition
     k_pred_all = predict_k_per_dataset(all_diagnostics, model, config)
 
     records = []
@@ -587,7 +572,7 @@ def main():
     logger.info("Decomposed ES error for %d / %d datasets",
                 len(records), len(all_diagnostics))
 
-    # ── xi bias/variance profiles ─────────────────────────────────────────
+    # xi bias/variance profiles
     groups = {}
     for d in all_diagnostics:
         ds = d[0]
@@ -597,7 +582,7 @@ def main():
         for key, grp in groups.items()
     }
 
-    # ── aggregate, verify, report ─────────────────────────────────────────
+    # aggregate, verify, report
     decomposition = aggregate(records)
     run_verification(records, model, config)
 

@@ -53,7 +53,7 @@ def main():
     fig_dir = "docs/figures"
     os.makedirs(fig_dir, exist_ok=True)
 
-    # ── Load CNN model ─────────────────────────────────────────────────────
+    # Load CNN model
     model_cfg = config['model']
     in_channels = len(config.get('features', {}).get('columns', [0,1,2,3,4,5,6]))
 
@@ -64,7 +64,7 @@ def main():
     cnn.load_state_dict(torch.load('outputs/checkpoints/model_regression.pt', weights_only=True))
     cnn.eval()
 
-    # ── Load synthetic data ────────────────────────────────────────────────
+    # Load synthetic data
     with open('outputs/data/diagnostics.pkl', 'rb') as f:
         all_diagnostics = pickle.load(f)
 
@@ -85,9 +85,7 @@ def main():
         for yp, m in zip(y_pred_all, meta)
     ])
 
-    # ══════════════════════════════════════════════════════════════════════
-    # STEP 1: Build correction dataset from TRAINING synthetic data
-    # ══════════════════════════════════════════════════════════════════════
+    # Step 1: Build correction dataset from training synthetic data
     logger.info("=" * 60)
     logger.info("STEP 1: Building correction dataset from training data")
 
@@ -96,9 +94,7 @@ def main():
 
     X_corr, y_corr = build_correction_dataset(train_diags, train_k, config)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # STEP 2: Train correction network
-    # ══════════════════════════════════════════════════════════════════════
+    # Step 2: Train correction network
     logger.info("=" * 60)
     logger.info("STEP 2: Training ES correction network")
 
@@ -112,9 +108,7 @@ def main():
     }, ckpt_path)
     logger.info("Checkpoint saved to %s", ckpt_path)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # STEP 3: Evaluate on synthetic TEST data
-    # ══════════════════════════════════════════════════════════════════════
+    # Step 3: Evaluate on synthetic test data
     logger.info("=" * 60)
     logger.info("STEP 3: Evaluating on synthetic test data")
 
@@ -180,9 +174,7 @@ def main():
         logger.info("  %-10s %11.1f%% %11.1f%% %+11.1f%% %8d",
                      lbl, o, c, o - c, mask.sum())
 
-    # ══════════════════════════════════════════════════════════════════════
-    # STEP 4: Apply to real data
-    # ══════════════════════════════════════════════════════════════════════
+    # Step 4: Apply to real data
     logger.info("=" * 60)
     logger.info("STEP 4: Applying to real data")
 
@@ -273,9 +265,7 @@ def main():
             else:
                 logger.info("  %s %s: insufficient violations", tail_mode, label)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # PLOTS
-    # ══════════════════════════════════════════════════════════════════════
+    # Plots
 
     # Scatter: predicted vs true correction factor (synthetic)
     fig, ax = plt.subplots(figsize=(7, 7))

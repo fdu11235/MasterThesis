@@ -28,7 +28,7 @@ from src.evaluate import evaluate_all, plot_results
 
 
 def main():
-    # ── CLI ───────────────────────────────────────────────────────────────
+    # CLI
     parser = argparse.ArgumentParser(description="Run the full POT threshold-selection pipeline.")
     parser.add_argument("--config", type=str, default="config/default.yaml",
                         help="Path to YAML configuration file.")
@@ -41,7 +41,7 @@ def main():
                         help="Number of parallel jobs for diagnostics (default: -1 = all cores).")
     args = parser.parse_args()
 
-    # ── Logging ────────────────────────────────────────────────────────────
+    # Logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
@@ -53,7 +53,7 @@ def main():
         config = yaml.safe_load(f)
     logger.info("Loaded config from %s", args.config)
 
-    # ── Feature config ─────────────────────────────────────────────────
+    # Feature config
     feat_cfg = config.get("features", {})
     in_channels = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
     tag = feat_cfg.get("tag", "")
@@ -62,12 +62,12 @@ def main():
     if args.fresh:
         logger.info("--fresh flag set: ignoring existing checkpoints")
 
-    # ── Output directories ────────────────────────────────────────────────
+    # Output directories
     os.makedirs("outputs/data", exist_ok=True)
     os.makedirs(f"{out_base}/checkpoints", exist_ok=True)
     os.makedirs(f"{out_base}/figures", exist_ok=True)
 
-    # ── Step 1: Generate synthetic data ───────────────────────────────────
+    # Step 1: Generate synthetic data
     synthetic_path = "outputs/data/synthetic.pkl"
     if not args.fresh and os.path.exists(synthetic_path):
         logger.info("[Step 1] Loading cached synthetic data from %s", synthetic_path)
@@ -81,7 +81,7 @@ def main():
             pickle.dump(datasets, f)
         logger.info("  → %d datasets saved to %s", len(datasets), synthetic_path)
 
-    # ── Steps 2-4: Sort, build k-grid, compute baseline k* ───────────────
+    # Steps 2-4: Sort, build k-grid, compute baseline k*
     diagnostics_path = "outputs/data/diagnostics.pkl"
     if not args.fresh and os.path.exists(diagnostics_path):
         logger.info("[Steps 2-4] Loading cached diagnostics from %s", diagnostics_path)
@@ -102,18 +102,18 @@ def main():
             pickle.dump(all_diagnostics, f)
         logger.info("  → diagnostics saved to %s", diagnostics_path)
 
-    # ── Determine task mode ─────────────────────────────────────────────
+    # Determine task mode
     task = config["model"].get("task", "classification")
     model_cfg = config["model"]
     test_frac = config["evaluate"]["test_fraction"]
 
     if task == "regression":
-        # ── Step 5: Build unified regression dataset ──────────────────────
+        # Step 5: Build unified regression dataset
         logger.info("[Step 5] Building unified regression dataset …")
         X, y, meta = build_dataset_regression(all_diagnostics, config)
         logger.info("  → X %s, y %s", tuple(X.shape), tuple(y.shape))
 
-        # ── Step 6: Single train/test split, train one model ─────────────
+        # Step 6: Single train/test split, train one model
         ckpt_path = f"{out_base}/checkpoints/model_regression.pt"
         N = len(X)
         torch.manual_seed(42)
@@ -127,7 +127,7 @@ def main():
         test_meta = [meta[i] for i in test_idx.tolist()]
         test_diags_all = [all_diagnostics[i] for i in test_idx.tolist()]
 
-        # ── Training data augmentation via perturbation ────────────────────
+        # Training data augmentation via perturbation
         perturb_cfg = config.get("perturbation", {})
         augment = perturb_cfg.get("augment_training", False)
 
@@ -237,7 +237,7 @@ def main():
             torch.save(model.state_dict(), ckpt_path)
             logger.info("  → checkpoint saved to %s", ckpt_path)
 
-        # ── Step 7: Predict, denormalize, group by n, evaluate ───────────
+        # Step 7: Predict, denormalize, group by n, evaluate
         logger.info("[Step 7] Evaluating regression model …")
         y_pred_norm = predict(model, X_test, task="regression")
 
@@ -297,7 +297,7 @@ def main():
                          k_pred=grp_k_pred, k_true=grp_k_true, history=history)
 
     else:
-        # ── Classification path (original) ────────────────────────────────
+        # Classification path (original)
         logger.info("[Step 5] Building feature tensors (classification) …")
         grouped_datasets = build_dataset(all_diagnostics, config)
         for n_size, (X, y) in sorted(grouped_datasets.items()):

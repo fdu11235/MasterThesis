@@ -46,7 +46,7 @@ def main():
                         help="Number of ensemble members (default: 5)")
     args = parser.parse_args()
 
-    # ── Logging ────────────────────────────────────────────────────────────
+    # Logging
     os.makedirs("logs", exist_ok=True)
     log_file = "logs/pipeline_ensemble.log"
 
@@ -65,7 +65,7 @@ def main():
         config = yaml.safe_load(f)
     logger.info("Loaded config from %s", args.config)
 
-    # ── Feature config ─────────────────────────────────────────────────
+    # Feature config
     feat_cfg = config.get("features", {})
     in_channels = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
     tag = feat_cfg.get("tag", "")
@@ -74,7 +74,7 @@ def main():
     os.makedirs(f"{out_base}/checkpoints", exist_ok=True)
     os.makedirs(f"{out_base}/figures/ensemble", exist_ok=True)
 
-    # ── Load cached data ─────────────────────────────────────────────────
+    # Load cached data
     diagnostics_path = "outputs/data/diagnostics.pkl"
     if not os.path.exists(diagnostics_path):
         logger.error("No cached diagnostics found at %s. Run run_pipeline.py first.", diagnostics_path)
@@ -85,7 +85,7 @@ def main():
         all_diagnostics = pickle.load(f)
     logger.info("  → %d diagnostics loaded", len(all_diagnostics))
 
-    # ── Build dataset ─────────────────────────────────────────────────────
+    # Build dataset
     model_cfg = config["model"]
     test_frac = config["evaluate"]["test_fraction"]
 
@@ -93,7 +93,7 @@ def main():
     X, y, meta = build_dataset_regression(all_diagnostics, config)
     logger.info("  → X %s, y %s", tuple(X.shape), tuple(y.shape))
 
-    # ── Fixed train/test split (same as run_pipeline.py) ──────────────────
+    # Fixed train/test split (same as run_pipeline.py)
     N = len(X)
     torch.manual_seed(42)
     perm = torch.randperm(N)
@@ -108,7 +108,7 @@ def main():
 
     logger.info("Train/test split: %d train, %d test", len(X_train), len(X_test))
 
-    # ── Train ensemble ────────────────────────────────────────────────────
+    # Train ensemble
     seeds = SEEDS[:args.n_seeds]
     all_y_pred_norm = []
     all_histories = []
@@ -153,7 +153,7 @@ def main():
         n_epochs = len(history["val_loss"])
         logger.info("  → seed=%d: best_val_loss=%.4f, epochs=%d", seed, best_val, n_epochs)
 
-    # ── Ensemble predictions ──────────────────────────────────────────────
+    # Ensemble predictions
     all_y_pred_norm = np.array(all_y_pred_norm)  # (n_seeds, N_test)
     ensemble_pred_norm = all_y_pred_norm.mean(axis=0)
     ensemble_std_norm = all_y_pred_norm.std(axis=0)
@@ -161,7 +161,7 @@ def main():
     logger.info("Ensemble prediction std: mean=%.4f, median=%.4f, max=%.4f",
                 ensemble_std_norm.mean(), np.median(ensemble_std_norm), ensemble_std_norm.max())
 
-    # ── Denormalize & evaluate ────────────────────────────────────────────
+    # Denormalize & evaluate
     def denormalize_k(y_pred_norm, meta_list):
         return np.array([
             np.clip(round(m["k_min"] + yp * (m["k_max"] - m["k_min"])),
@@ -235,7 +235,7 @@ def main():
         plot_results(results, grp_diags, f"{out_base}/figures/ensemble/n{n_size}",
                      k_pred=grp_k_pred, k_true=grp_k_true, history=all_histories[0])
 
-    # ── Uncertainty analysis: ensemble std vs actual error ─────────────────
+    # Uncertainty analysis: ensemble std vs actual error
     k_errors = np.abs(k_ensemble - k_true_values).astype(float)
     k_std_denorm = np.array([
         ensemble_std_norm[j] * (m["k_max"] - m["k_min"])
@@ -244,7 +244,7 @@ def main():
     correlation = np.corrcoef(k_std_denorm, k_errors)[0, 1]
     logger.info("Ensemble std vs |k_error| correlation: %.3f", correlation)
 
-    # ── Save results ──────────────────────────────────────────────────────
+    # Save results
     results_path = f"{out_base}/ensemble_results.pkl"
     save_data = {
         "seeds": seeds,

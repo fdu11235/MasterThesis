@@ -60,7 +60,7 @@ def main():
 
     os.makedirs('outputs/data', exist_ok=True)
 
-    # ── Load trained models ────────────────────────────────────────────────
+    # Load trained models
     logger.info("Loading trained CNN...")
     cnn = ThresholdCNN(
         in_channels=in_channels, channels=model_cfg['channels'],
@@ -84,7 +84,7 @@ def main():
     corr_net.X_std = ckpt['X_std']
     corr_net.eval()
 
-    # ── Download OOS tickers ───────────────────────────────────────────────
+    # Download OOS tickers
     logger.info("Downloading OOS tickers: %s", OOS_TICKERS)
     ticker_data = load_returns(
         OOS_TICKERS,
@@ -117,19 +117,19 @@ def main():
 
     logger.info("Total OOS windows: %d", len(datasets))
 
-    # ── Sign-split (loss tail) ─────────────────────────────────────────────
+    # Sign-split (loss tail)
     logger.info("Preparing loss-tail sign-split...")
     loss_datasets = prepare_real_datasets_signsplit(
         config, returns_lookup, datasets, 'loss')
 
-    # ── POT diagnostics ────────────────────────────────────────────────────
+    # POT diagnostics
     logger.info("Computing POT diagnostics (%d windows)...", len(loss_datasets))
     pot_cfg = config['pot']
     loss_diagnostics = Parallel(n_jobs=args.n_jobs, verbose=5)(
         delayed(process_one_dataset)(ds, pot_cfg) for ds in loss_datasets
     )
 
-    # ── Build features + predict ───────────────────────────────────────────
+    # Build features + predict
     logger.info("Building features and predicting k*...")
     X, y, meta = build_dataset_regression(loss_diagnostics, config)
 
@@ -141,7 +141,7 @@ def main():
         for yp, m in zip(y_pred, meta)
     ])
 
-    # ── Backtest ───────────────────────────────────────────────────────────
+    # Backtest
     logger.info("Running VaR/ES backtesting...")
 
     for label, use_correction in [('uncorrected', False), ('corrected', True)]:

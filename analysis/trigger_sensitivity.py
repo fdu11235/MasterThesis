@@ -134,7 +134,7 @@ def main():
     fams = sorted(rel_by_fam[TRIGGERS[0]].keys(),
                   key=lambda f: rrmse(rel_by_fam[0.7][f]))
 
-    # ── Build text table ──────────────────────────────────────────────────
+    # Build text table
     lines = []
     lines.append(f"Synthetic ES RelRMSE vs fallback trigger "
                  f"(held-out test split, n_used={n_used} samples, p={p})\n")
@@ -159,7 +159,7 @@ def main():
         f.write(text + "\n")
     print(f"\nWrote {OUT_TXT}")
 
-    # ── Figure: two panels — small synthetic cost vs large routing change ──
+    # Figure: two panels — small synthetic cost vs large routing change
     xs = list(range(len(TRIGGERS)))
     labels = [f"$\\hat{{\\xi}} > {t}$" for t in TRIGGERS]
     fig, (axL, axR) = plt.subplots(1, 2, figsize=(11, 4.4))

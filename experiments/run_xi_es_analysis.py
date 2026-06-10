@@ -60,7 +60,7 @@ def main():
     fig_dir = "docs/figures"
     os.makedirs(fig_dir, exist_ok=True)
 
-    # ── Load synthetic data ────────────────────────────────────────────────
+    # Load synthetic data
     with open('outputs/data/diagnostics.pkl', 'rb') as f:
         all_diagnostics = pickle.load(f)
 
@@ -96,7 +96,7 @@ def main():
 
     p = config['evaluate']['quantile_p']
 
-    # ── Compute xi, ES error for each sample ───────────────────────────────
+    # Compute xi, ES error for each sample
     records = []
     for i, (ds, diag) in enumerate(test_diags):
         k = k_pred[i]
@@ -131,7 +131,7 @@ def main():
     es_err = np.array([r['es_rel_error'] for r in records])
     dists = [r['dist_type'] for r in records]
 
-    # ── Plot 1: ES relative error vs xi (scatter) ─────────────────────────
+    # Plot 1: ES relative error vs xi (scatter)
     fig, ax = plt.subplots(figsize=(12, 7))
     for dt in sorted(set(dists)):
         mask = np.array([d == dt for d in dists])
@@ -148,7 +148,7 @@ def main():
     plt.close(fig)
     logger.info("Saved xi_es_scatter.png")
 
-    # ── Plot 2: Amplification curve 1/(1-xi) ──────────────────────────────
+    # Plot 2: Amplification curve 1/(1-xi)
     fig, ax = plt.subplots(figsize=(10, 6))
     xi_range = np.linspace(0, 0.95, 200)
     amp = 1 / (1 - xi_range)
@@ -168,7 +168,7 @@ def main():
     plt.close(fig)
     logger.info("Saved xi_es_amplification.png")
 
-    # ── Plot 3: ES error by xi bin (box plot) ─────────────────────────────
+    # Plot 3: ES error by xi bin (box plot)
     bins = [(0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.5)]
     bin_labels = ['0-0.2', '0.2-0.4', '0.4-0.6', '0.6-0.8', '0.8+']
     bin_data = []
@@ -197,7 +197,7 @@ def main():
     plt.close(fig)
     logger.info("Saved xi_es_binned_boxplot.png")
 
-    # ── Plot 4: All methods fail equally (real data MF p-values) ──────────
+    # Plot 4: All methods fail equally (real data MF p-values)
     methods_mf = {
         'CNN': 0.006,
         'Baseline k*': 0.002,
@@ -221,7 +221,7 @@ def main():
     plt.close(fig)
     logger.info("Saved xi_es_all_methods_mf.png")
 
-    # ── Plot 5: Xi distribution comparison (synthetic vs real) ────────────
+    # Plot 5: Xi distribution comparison (synthetic vs real)
     with open('outputs/data/real_diagnostics_loss.pkl', 'rb') as f:
         real_diags = pickle.load(f)
 
@@ -251,7 +251,7 @@ def main():
     plt.close(fig)
     logger.info("Saved xi_es_distribution_comparison.png")
 
-    # ── Save results ───────────────────────────────────────────────────────
+    # Save results
     results = {
         'records': records,
         'xi_arr': xi_arr,

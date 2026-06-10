@@ -62,7 +62,7 @@ def main():
 
     os.makedirs(f"{out_base}/figures/perturbation", exist_ok=True)
 
-    # ── Load prerequisites ─────────────────────────────────────────────────
+    # Load prerequisites
     synthetic_path = "outputs/data/synthetic.pkl"
     diagnostics_path = "outputs/data/diagnostics.pkl"
     ckpt_path = f"{out_base}/checkpoints/model_regression.pt"
@@ -78,7 +78,7 @@ def main():
         all_diagnostics = pickle.load(f)
     logger.info("Loaded %d datasets and %d diagnostics", len(datasets), len(all_diagnostics))
 
-    # ── Load trained CNN ───────────────────────────────────────────────────
+    # Load trained CNN
     model_cfg = config["model"]
     model = ThresholdCNN(
         in_channels=in_channels,
@@ -92,7 +92,7 @@ def main():
     model.eval()
     logger.info("Loaded trained CNN from %s", ckpt_path)
 
-    # ── Reproduce test split (same logic as run_pipeline.py) ──────────────
+    # Reproduce test split (same logic as run_pipeline.py)
     X, y, meta = build_dataset_regression(all_diagnostics, config)
     N = len(X)
     test_frac = config["evaluate"]["test_fraction"]
@@ -104,7 +104,7 @@ def main():
 
     logger.info("Test set: %d samples (reproduced from run_pipeline.py split)", len(test_idx))
 
-    # ── Baseline predictions on unperturbed test data ─────────────────────
+    # Baseline predictions on unperturbed test data
     X_test = X[test_idx]
     test_meta = [meta[i] for i in test_idx]
     test_datasets = [datasets[i] for i in test_idx]
@@ -118,7 +118,7 @@ def main():
 
     logger.info("Baseline k* predictions computed (median=%d)", np.median(k_pred_baseline))
 
-    # ── Run perturbation experiments ───────────────────────────────────────
+    # Run perturbation experiments
     pot_cfg = dict(config["pot"])
     pot_cfg["decluster"] = False  # synthetic data is i.i.d.
 
@@ -203,13 +203,13 @@ def main():
         logger.info("  %s: agree@5=%.3f  agree@10=%.3f  MAD=%.1f  median_dev=%.1f",
                      name, agreement_5, agreement_10, mad, median_dev)
 
-    # ── Save results ───────────────────────────────────────────────────────
+    # Save results
     results_path = f"{out_base}/perturbation_results.pkl"
     with open(results_path, "wb") as f:
         pickle.dump(all_results, f)
     logger.info("Results saved to %s", results_path)
 
-    # ── Plots ──────────────────────────────────────────────────────────────
+    # Plots
     fig_dir = f"{out_base}/figures/perturbation"
 
     # Box plot of |k* deviations|

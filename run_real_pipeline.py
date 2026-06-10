@@ -32,7 +32,7 @@ from src.evaluate_real import evaluate_real, evaluate_real_signsplit, plot_real_
 
 
 def main():
-    # ── CLI ───────────────────────────────────────────────────────────────
+    # CLI
     parser = argparse.ArgumentParser(description="Run the real-data POT pipeline (Step 8).")
     parser.add_argument("--config", type=str, default="config/default.yaml",
                         help="Path to YAML configuration file.")
@@ -45,7 +45,7 @@ def main():
                         help="Number of parallel jobs for diagnostics (default: -1 = all cores).")
     args = parser.parse_args()
 
-    # ── Logging ────────────────────────────────────────────────────────────
+    # Logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
@@ -57,7 +57,7 @@ def main():
         config = yaml.safe_load(f)
     logger.info("Loaded config from %s", args.config)
 
-    # ── Feature config ─────────────────────────────────────────────────
+    # Feature config
     feat_cfg = config.get("features", {})
     in_channels = len(feat_cfg.get("columns", [0, 1, 2, 3, 4, 5, 6]))
     tag = feat_cfg.get("tag", "")
@@ -66,12 +66,12 @@ def main():
     if args.fresh:
         logger.info("--fresh flag set: ignoring existing checkpoints")
 
-    # ── Output directories ────────────────────────────────────────────────
+    # Output directories
     os.makedirs("outputs/data", exist_ok=True)
     os.makedirs(f"{out_base}/checkpoints", exist_ok=True)
     os.makedirs(f"{out_base}/figures/real", exist_ok=True)
 
-    # ── Step 1: Load real data ────────────────────────────────────────────
+    # Step 1: Load real data
     real_ds_path = "outputs/data/real_datasets.pkl"
     if not args.fresh and os.path.exists(real_ds_path):
         logger.info("[Step 1] Loading cached real datasets from %s", real_ds_path)
@@ -87,7 +87,7 @@ def main():
             pickle.dump({"datasets": datasets, "returns_lookup": returns_lookup}, f)
         logger.info("  → %d windows saved to %s", len(datasets), real_ds_path)
 
-    # ── Steps 2-4: POT diagnostics (unconditional) ───────────────────────
+    # Steps 2-4: POT diagnostics (unconditional)
     diag_path = "outputs/data/real_diagnostics.pkl"
     if not args.fresh and os.path.exists(diag_path):
         logger.info("[Steps 2-4] Loading cached diagnostics from %s", diag_path)
@@ -107,7 +107,7 @@ def main():
             pickle.dump(all_diagnostics, f)
         logger.info("  → diagnostics saved to %s", diag_path)
 
-    # ── GARCH-filtered datasets ───────────────────────────────────────────
+    # GARCH-filtered datasets
     garch_ds_path = "outputs/data/real_garch_datasets.pkl"
     if not args.fresh and os.path.exists(garch_ds_path):
         logger.info("[GARCH] Loading cached GARCH-filtered datasets from %s", garch_ds_path)
@@ -121,7 +121,7 @@ def main():
             pickle.dump(garch_datasets, f)
         logger.info("  → %d GARCH windows saved to %s", len(garch_datasets), garch_ds_path)
 
-    # ── GARCH POT diagnostics ────────────────────────────────────────────
+    # GARCH POT diagnostics
     garch_diag_path = "outputs/data/real_garch_diagnostics.pkl"
     if not args.fresh and os.path.exists(garch_diag_path):
         logger.info("[GARCH] Loading cached GARCH diagnostics from %s", garch_diag_path)
@@ -139,12 +139,12 @@ def main():
             pickle.dump(garch_diagnostics, f)
         logger.info("  → GARCH diagnostics saved to %s", garch_diag_path)
 
-    # ── Step 5: Build regression features (unconditional) ─────────────────
+    # Step 5: Build regression features (unconditional)
     logger.info("[Step 5] Building regression dataset …")
     X, y, meta = build_dataset_regression(all_diagnostics, config)
     logger.info("  → X %s, y %s", tuple(X.shape), tuple(y.shape))
 
-    # ── Time-ordered split (by end_date) ──────────────────────────────────
+    # Time-ordered split (by end_date)
     end_dates = [m.get("end_date", "") for m in meta]
     sorted_indices = np.argsort(end_dates)
 
@@ -164,7 +164,7 @@ def main():
         logger.info("  Train period ends: %s", end_dates[train_idx[-1]])
         logger.info("  Test period starts: %s", end_dates[test_idx[0]])
 
-    # ── Step 5b: Build GARCH regression features ─────────────────────────
+    # Step 5b: Build GARCH regression features
     logger.info("[Step 5b] Building GARCH regression dataset …")
     gX, gy, gmeta = build_dataset_regression(garch_diagnostics, config)
     logger.info("  → GARCH X %s, y %s", tuple(gX.shape), tuple(gy.shape))
@@ -183,12 +183,12 @@ def main():
 
     logger.info("  GARCH split: %d train, %d test", len(garch_train_idx), len(garch_test_idx))
 
-    # ── Transfer learning config ─────────────────────────────────────────
+    # Transfer learning config
     model_cfg = config["model"]
     tl_cfg = config.get("transfer_learning", {})
     tl_enabled = tl_cfg.get("enabled", False)
 
-    # ── Step 6: Train CNN (unconditional) ─────────────────────────────────
+    # Step 6: Train CNN (unconditional)
     ckpt_path = f"{out_base}/checkpoints/model_real.pt"
     if tl_enabled:
         ckpt_path = f"{out_base}/checkpoints/model_real_transfer.pt"
@@ -246,7 +246,7 @@ def main():
         torch.save(model.state_dict(), ckpt_path)
         logger.info("  → checkpoint saved to %s", ckpt_path)
 
-    # ── Step 6b: Train CNN on GARCH-filtered features ─────────────────────
+    # Step 6b: Train CNN on GARCH-filtered features
     garch_ckpt_path = f"{out_base}/checkpoints/model_real_garch.pt"
     if tl_enabled:
         garch_ckpt_path = f"{out_base}/checkpoints/model_real_garch_transfer.pt"
@@ -304,7 +304,7 @@ def main():
         torch.save(garch_model.state_dict(), garch_ckpt_path)
         logger.info("  → GARCH checkpoint saved to %s", garch_ckpt_path)
 
-    # ── Step 7: Predict, denormalize, evaluate ────────────────────────────
+    # Step 7: Predict, denormalize, evaluate
     logger.info("[Step 7] Evaluating with VaR backtesting …")
 
     # Unconditional predictions
@@ -398,7 +398,7 @@ def main():
     plot_real_results(results, f"{out_base}/figures/real",
                       history=history, garch_history=garch_history)
 
-    # ── Sign-split experiments (loss / profit tails) ───────────────────────
+    # Sign-split experiments (loss / profit tails)
     tail_modes = config["realdata"].get("tail_modes", ["abs"])
     for tail_mode in tail_modes:
         if tail_mode == "abs":
@@ -484,7 +484,7 @@ def main():
             pickle.dump(ss_results, f)
         logger.info("[%s] Results saved to %s", tail_mode, ss_results_path)
 
-        # ── GARCH + sign-split ─────────────────────────────────────────────
+        # GARCH + sign-split
         logger.info("[%s] GARCH + sign-split …", tail_mode)
         gss_ds_path = f"outputs/data/real_garch_datasets_{tail_mode}.pkl"
         if not args.fresh and os.path.exists(gss_ds_path):

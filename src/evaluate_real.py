@@ -466,7 +466,7 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
         results["historical_sim"]["var_all"].extend([hist_var] * len(future_returns))
         results["historical_sim"]["es_all"].extend([hist_es] * len(future_returns))
 
-    # ── GARCH-conditional methods ──────────────────────────────────────────
+    # GARCH-conditional methods
     if garch_test_data is not None and garch_diagnostics_list is not None:
         garch_methods = {}
         if garch_k_baseline is not None:
@@ -568,7 +568,7 @@ def evaluate_real(test_data, diagnostics_list, k_pred, k_baseline,
             "mcneil_frey": mf,
         }
 
-    # ── Multi-level VaR coverage ────────────────────────────────────────────
+    # Multi-level VaR coverage
     p_levels = [0.95, 0.975, 0.99, 0.995]
     multi_level = {}
     for method_name, k_values in methods.items():

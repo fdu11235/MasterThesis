@@ -1,6 +1,6 @@
 """Standalone regeneration of the §5.1 prediction-accuracy figures.
 
-NOTE: scripts/reconcile_synthetic_eval.py is the canonical script that
+NOTE: analysis/reconcile_synthetic_eval.py is the canonical script that
 produces synthetic_test_eval.pkl AND the three figures in one pass. This
 helper script exists only as a thin wrapper for the figures, reading the
 same canonical pickle. Outputs:

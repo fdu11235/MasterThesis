@@ -309,14 +309,11 @@ def fig6_kstar_before_after():
 TABLE_DIR = os.path.join(ROOT, "outputs", "tables")
 os.makedirs(TABLE_DIR, exist_ok=True)
 
-# Per-family ES relRMSE that the Results chapter currently quotes. These
-# match the numbers in fig1 above and are the post-heavy-tail-penalty values
-# from the run referenced by the thesis prose. The VaR counterpart is read
-# (Per-family ES RelRMSE constants previously hardcoded here have been
+# Per-family ES RelRMSE constants previously hardcoded here have been
 # removed. The table_synthetic_per_family function below now reads
 # outputs/data/synthetic_test_eval.pkl, produced by
-# scripts/reconcile_synthetic_eval.py, so the table stays in sync with the
-# §5.1 figures and the appendix decomposition numbers.)
+# analysis/reconcile_synthetic_eval.py, so the table stays in sync with the
+# §5.1 figures and the appendix decomposition numbers.
 
 
 def table_synthetic_per_family():
@@ -324,7 +321,7 @@ def table_synthetic_per_family():
 
     Numbers come from outputs/data/synthetic_test_eval.pkl, the canonical
     test-set evaluation of the deployed model produced by
-    scripts/reconcile_synthetic_eval.py. Re-run that script if the model
+    analysis/reconcile_synthetic_eval.py. Re-run that script if the model
     or diagnostics change.
     """
     path = os.path.join(ROOT, "outputs", "data", "synthetic_test_eval.pkl")
